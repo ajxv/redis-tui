@@ -1,0 +1,37 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Output of the go coverage tool
+*.coverprofile
+
+# Dependency directories (remove the leading slash if you want to ignore directories in the entire repository)
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# Redis data files (if any)
+dump.rdb
+appendonly.aof
+
+# Bubbletea cache (if any)
+bubbletea-cache/
+
+# OS generated files
+.DS_Store
+Thumbs.db
