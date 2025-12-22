@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -37,6 +39,7 @@ type Model struct {
 	Input  string
 	Output string
 	Conn   net.Conn
+	Reader *bufio.Reader
 }
 
 func (m Model) Init() tea.Cmd {
@@ -73,16 +76,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// read response
-			buffer := make([]byte, 1024)
-			n, err := m.Conn.Read(buffer)
+			response, err := ReadResp(m.Reader)
 			if err != nil {
 				m.Output = "Error reading: " + err.Error()
 			} else {
-				// raw data might contain \r\n which messes up the TUI
-				raw := string(buffer[:n])
-
-				// Clean it up!
-				m.Output = ParseResponse(raw)
+				m.Output = response
 			}
 
 			// clear input
@@ -105,35 +103,70 @@ func (m Model) View() string {
 	return fmt.Sprintf("REDIS TUI\n\nResponse:\n%q\n\n> %s\n\n(Press Ctrl+C to quit)", m.Output, m.Input)
 }
 
-func ParseResponse(raw string) string {
-	// 1. If empty, return nothing
-	if len(raw) == 0 {
-		return ""
+func ReadResp(r *bufio.Reader) (string, error) {
+	// 1. Read the first byte to know the type
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", err
 	}
 
-	// 2. Identify the type by the first byte
-	prefix := raw[0]
-	content := strings.TrimSpace(raw[1:]) // Remove the first char and trailing \r\n
+	// Remove the trailing \r\n to look at the prefix
+	line = strings.TrimSuffix(line, "\r\n")
+	if len(line) == 0 {
+		return "", nil
+	}
+
+	prefix := line[0]   // e.g., '*' or '$'
+	content := line[1:] // e.g., "2" or "3"
 
 	switch prefix {
-	case '+', '-':
-		// Simple String (+) or Error (-): content is already clean
-		return content
-
-	case ':':
-		// Integer (:): content is just the number
-		return "(int) " + content
+	case '+', '-', ':':
+		// Simple strings, Errors, Integers: just return the content
+		return content, nil
 
 	case '$':
-		// Bulk String ($): Format is "$Length\r\nValue"
-		// We need to split by the first \r\n to separate the length from the value
-		parts := strings.SplitN(content, "\r\n", 2)
-		if len(parts) == 2 {
-			return parts[1] // Return just the value part
+		// Bulk String ($3\r\nfoo\r\n)
+		// 'content' tells us the length (e.g. "3")
+		var length int
+		fmt.Sscanf(content, "%d", &length)
+
+		if length == -1 {
+			return "(nil)", nil // Handle NULL response
 		}
+
+		// Read the exact number of bytes for the data
+		data := make([]byte, length)
+		_, err := io.ReadFull(r, data)
+		if err != nil {
+			return "", err
+		}
+
+		// Read the trailing \r\n that comes after the data
+		r.ReadString('\n')
+
+		return string(data), nil
+
+	case '*':
+		// Array (*2\r\n...)
+		// 'content' tells us how many items are in the array
+		var count int
+		fmt.Sscanf(content, "%d", &count)
+
+		// Loop that many times and call THIS function recursively!
+		var items []string
+		for i := 0; i < count; i++ {
+			item, err := ReadResp(r)
+			if err != nil {
+				return "", err
+			}
+			items = append(items, fmt.Sprintf("%d) %s", i+1, item))
+		}
+
+		// Join them with newlines to look like a list
+		return strings.Join(items, "\n"), nil
 	}
 
-	return raw // Fallback: return raw if we don't recognize it
+	return line, nil
 }
 
 // -- Main Function--
@@ -147,9 +180,13 @@ func main() {
 	}
 	defer conn.Close()
 
+	// wrap connection in reader
+	reader := bufio.NewReader(conn)
+
 	// start BubbleTea program
 	p := tea.NewProgram(Model{
-		Conn: conn, // pass connection to model
+		Conn:   conn,
+		Reader: reader,
 	})
 
 	if _, err := p.Run(); err != nil {
