@@ -28,6 +28,7 @@ const (
 	StateOutput
 	StateBrowser
 	StateLoading
+	StateConfirmation
 )
 
 type ListItem struct {
@@ -604,13 +605,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if selectedField, ok := selectedField.(ListItem); ok {
 					m.ActiveField = selectedField.title
 
-					cmd := redis.RedisCmd{
-						Name: "HDEL",
-						Args: []string{m.ActiveKey, m.ActiveField},
-					}
-
-					m.SelectedOp = "HDEL" // get already handles the expected response strucuture
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+					m.PreviousState = m.CurrentState
+					m.CurrentState = StateConfirmation
+					m.SelectedOp = "HDEL"
 
 				}
 
@@ -659,6 +656,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if selectedKey, ok := selectedKey.(ListItem); ok {
 					m.ActiveKey = selectedKey.title
 
+					m.PreviousState = m.CurrentState
+					m.CurrentState = StateConfirmation
+					m.SelectedOp = "DEL"
+				}
+
+			}
+		}
+
+		updatedModel, cmd := m.KeyList.Update(msg)
+		m.KeyList = updatedModel
+		return m, cmd
+
+	case StateConfirmation:
+		keyMsg, ok := msg.(tea.KeyMsg)
+		if ok {
+			switch keyMsg.String() {
+			case "esc", "n", "N":
+				m.CurrentState = m.PreviousState
+
+				return m, nil
+
+			case "y", "Y":
+				switch m.PreviousState {
+				case StateBrowser:
 					cmd := redis.RedisCmd{
 						Name: "DEL",
 						Args: []string{m.ActiveKey},
@@ -666,8 +687,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					m.SelectedOp = "DEL"
 					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-				}
 
+				case StateFieldSelect:
+					cmd := redis.RedisCmd{
+						Name: "HDEL",
+						Args: []string{m.ActiveKey, m.ActiveField},
+					}
+
+					m.SelectedOp = "HDEL"
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
+				}
 			}
 		}
 
@@ -698,6 +728,17 @@ func (m Model) View() string {
 		return m.KeyList.View()
 	case StateLoading:
 		return "Loading.."
+	case StateConfirmation:
+		switch m.SelectedOp {
+		case "DEL":
+			return "Are you sure you want to delete the key: " + (m.ActiveKey) + "? (y/n)"
+
+		case "HDEL":
+			return "Are you sure you want to delete the field: " + (m.ActiveField) + "? (y/n)"
+
+		default:
+			return "Are you sure you want to perform this action: " + (m.SelectedOp) + "? (y/n)"
+		}
 	default:
 		return ""
 	}
