@@ -389,6 +389,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.CurrentState = StateOutput
 
+		case "DEL":
+			m.Output = "Deleted Key: " + m.ActiveKey
+
+			m.SelectedOp = "EXPLORE"
+			// refresh the keylist
+			return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader))
+
+		case "HDEL":
+			m.Output = "Deleted Hash Key: " + m.ActiveKey
+
+			cmd := redis.RedisCmd{
+				Name: "HKEYS",
+				Args: []string{m.ActiveKey},
+			}
+
+			m.SelectedOp = "HKEYS"
+
+			// refresh the keylist
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
+		case "DELETE":
+			if res, ok := msg.Result.(int); ok {
+				m.Output = strconv.Itoa(res)
+			} else {
+				m.Output = "Unexpected response"
+			}
+			m.CurrentState = StateOutput
+
 		}
 	}
 
@@ -400,7 +428,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.SelectedOp = selectedItem.title
 
 				switch m.SelectedOp {
-				case "SET", "GET", "HSET", "HGET":
+				case "SET", "GET", "HSET", "HGET", "DELETE":
 					m.Input.Focus()
 					m.CurrentState = StateInputKey
 				case "EXPLORE":
@@ -447,6 +475,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "HGET":
 				cmd := redis.RedisCmd{
 					Name: "HKEYS",
+					Args: []string{m.ActiveKey},
+				}
+
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
+			case "DELETE":
+				cmd := redis.RedisCmd{
+					Name: "DEL",
 					Args: []string{m.ActiveKey},
 				}
 
@@ -533,32 +569,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StateFieldSelect:
 		keyMsg, ok := msg.(tea.KeyMsg)
-		if ok && keyMsg.String() == "esc" {
-			m.Input.SetValue("")
-			m.CurrentState = StateMenu
-			m.Output = ""
-			return m, nil
-		}
 
-		if ok && keyMsg.String() == "enter" {
-			selectedField := m.FieldsList.SelectedItem()
-			if selectedField, ok := selectedField.(ListItem); ok {
-				m.ActiveField = selectedField.title
+		if ok {
+			switch keyMsg.String() {
+			case "esc":
+				m.Input.SetValue("")
+				m.CurrentState = StateMenu
+				m.Output = ""
+				return m, nil
 
-				switch m.SelectedOp {
-				case "HGET", "HKEYS", "EXPLORE":
+			case "enter":
+				selectedField := m.FieldsList.SelectedItem()
+				if selectedField, ok := selectedField.(ListItem); ok {
+					m.ActiveField = selectedField.title
+
+					switch m.SelectedOp {
+					case "HGET", "HKEYS", "EXPLORE":
+						cmd := redis.RedisCmd{
+							Name: "HGET",
+							Args: []string{m.ActiveKey, m.ActiveField},
+						}
+
+						m.SelectedOp = "GET" // get already handles the expected response strucuture
+						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
+					case "EXPLORE_LIST":
+						m.Output = m.ActiveField
+						m.CurrentState = StateOutput
+					}
+				}
+
+			case "d":
+				selectedField := m.FieldsList.SelectedItem()
+				if selectedField, ok := selectedField.(ListItem); ok {
+					m.ActiveField = selectedField.title
+
 					cmd := redis.RedisCmd{
-						Name: "HGET",
+						Name: "HDEL",
 						Args: []string{m.ActiveKey, m.ActiveField},
 					}
 
-					m.SelectedOp = "GET" // get already handles the expected response strucuture
+					m.SelectedOp = "HDEL" // get already handles the expected response strucuture
 					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
-				case "EXPLORE_LIST":
-					m.Output = m.ActiveField
-					m.CurrentState = StateOutput
 				}
+
 			}
 		}
 
@@ -577,25 +632,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StateBrowser:
 		keyMsg, ok := msg.(tea.KeyMsg)
-		if ok && keyMsg.String() == "esc" {
-			m.Input.SetValue("")
-			m.CurrentState = StateMenu
-			m.Output = ""
-			return m, nil
-		}
+		if ok {
+			switch keyMsg.String() {
+			case "esc":
+				m.Input.SetValue("")
+				m.CurrentState = StateMenu
+				m.Output = ""
+				return m, nil
 
-		if ok && keyMsg.String() == "enter" {
-			selectedKey := m.KeyList.SelectedItem()
-			if selectedKey, ok := selectedKey.(ListItem); ok {
-				m.ActiveKey = selectedKey.title
+			case "enter":
+				selectedKey := m.KeyList.SelectedItem()
+				if selectedKey, ok := selectedKey.(ListItem); ok {
+					m.ActiveKey = selectedKey.title
 
-				cmd := redis.RedisCmd{
-					Name: "TYPE",
-					Args: []string{m.ActiveKey},
+					cmd := redis.RedisCmd{
+						Name: "TYPE",
+						Args: []string{m.ActiveKey},
+					}
+
+					m.SelectedOp = "CHECK_TYPE"
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 				}
 
-				m.SelectedOp = "CHECK_TYPE"
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+			case "d":
+				selectedKey := m.KeyList.SelectedItem()
+				if selectedKey, ok := selectedKey.(ListItem); ok {
+					m.ActiveKey = selectedKey.title
+
+					cmd := redis.RedisCmd{
+						Name: "DEL",
+						Args: []string{m.ActiveKey},
+					}
+
+					m.SelectedOp = "DEL"
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				}
+
 			}
 		}
 

@@ -109,6 +109,20 @@ func ReadResp(reader *bufio.Reader) (any, error) {
 		}
 		return items, nil
 
+	case ':':
+		// Simple int: Read until newline
+		msg, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+
+		num, err := strconv.Atoi(strings.TrimSpace(msg))
+		if err != nil {
+			return "", err
+		}
+
+		return num, nil // Clean up the result
+
 	}
 
 	return "", nil
