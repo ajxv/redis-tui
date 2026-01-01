@@ -3,6 +3,7 @@ package tui
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -145,6 +146,11 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader) tea.Cmd {
 
 func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd) tea.Cmd {
 	return func() tea.Msg {
+		// SAFETY CHECK: If there is no connection, return an error immediately
+		if conn == nil {
+			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
+		}
+
 		// 1. Send the command to Redis (conn.Write)
 		// 2. Read the response (redis.ReadResp)
 		// 3. Return a RedisResultMsg
@@ -184,6 +190,17 @@ type Model struct {
 	Conn          net.Conn
 	RedisAddress  string
 	Reader        *bufio.Reader
+}
+
+func (m Model) switchToLoadingAndExecute(cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	// save current state
+	if m.CurrentState != StateLoading {
+		m.PreviousState = m.CurrentState
+	}
+	// change to loading state
+	m.CurrentState = StateLoading
+
+	return m, cmd
 }
 
 func (m Model) Init() tea.Cmd {
@@ -321,8 +338,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 
 					m.SelectedOp = "GET"
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 				case "hash":
 					cmd := redis.RedisCmd{
@@ -331,8 +347,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 
 					m.SelectedOp = "HKEYS"
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 				case "list":
 					cmd := redis.RedisCmd{
@@ -341,8 +356,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 
 					m.SelectedOp = "LRANGE"
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 				case "set":
 					cmd := redis.RedisCmd{
@@ -351,8 +365,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 
 					m.SelectedOp = "SMEMBERS"
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 				case "zset":
 					cmd := redis.RedisCmd{
@@ -361,8 +374,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 
 					m.SelectedOp = "ZRANGE"
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 				}
 			} else {
@@ -392,8 +404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.Input.Focus()
 					m.CurrentState = StateInputKey
 				case "EXPLORE":
-					m.CurrentState = StateLoading
-					return m, scanRedisKeys(m.Conn, m.Reader)
+					return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader))
 				}
 			}
 		}
@@ -425,8 +436,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey},
 				}
 
-				m.CurrentState = StateLoading
-				return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 			case "SET":
 				m.CurrentState = StateInputValue
@@ -440,8 +450,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey},
 				}
 
-				m.CurrentState = StateLoading
-				return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 			}
 
@@ -504,8 +513,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey, m.ActiveValue},
 				}
 
-				m.CurrentState = StateLoading
-				return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 			case "HSET":
 				// send command
@@ -514,8 +522,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey, m.ActiveField, m.ActiveValue},
 				}
 
-				m.CurrentState = StateLoading
-				return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 			}
 		}
@@ -546,8 +553,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 
 					m.SelectedOp = "GET" // get already handles the expected response strucuture
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 				case "EXPLORE_LIST":
 					m.Output = m.ActiveField
@@ -589,8 +595,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				m.SelectedOp = "CHECK_TYPE"
-				m.CurrentState = StateLoading
-				return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 			}
 		}
 

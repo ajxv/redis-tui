@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -19,6 +20,14 @@ func run() error {
 	host := flag.String("host", "localhost:6379", "Redis Server host: <host:port>")
 	//parse flags
 	flag.Parse()
+
+	// fail fast: check if a valid server
+	if conn, err := net.Dial("tcp", *host); err != nil {
+		fmt.Printf("Connection error: %v\n", err)
+		return err
+	} else {
+		conn.Close()
+	}
 
 	// define menu items
 	items := []list.Item{
@@ -61,7 +70,7 @@ func run() error {
 	// start BubbleTea program
 	p := tea.NewProgram(initialModel)
 	if _, err := p.Run(); err != nil {
-		fmt.Printf("An error occured: %v", err)
+		fmt.Printf("An error occured: %v\n", err)
 		return err
 	}
 	return nil
