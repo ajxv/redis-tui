@@ -2,8 +2,11 @@ package tui
 
 import (
 	"bufio"
+	"errors"
+	"io"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/ajxv/redis-tui/internal/redis"
 	"github.com/charmbracelet/bubbles/list"
@@ -62,6 +65,18 @@ type RedisResultMsg struct {
 type RedisConnectionMsg struct {
 	Conn  net.Conn
 	Error error
+}
+
+// A message to tell us the wait time is over
+type TickMsg struct{}
+
+// A command that waits for 2 seconds, then returns the TickMsg
+func waitForNextConnection() tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(2 * time.Second)
+
+		return TickMsg{}
+	}
 }
 
 func connectToRedis(address string) tea.Cmd {
@@ -154,20 +169,21 @@ func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd) tea.C
 }
 
 type Model struct {
-	CurrentState AppState
-	MenuList     list.Model
-	FieldsList   list.Model
-	KeyList      list.Model
-	Input        textinput.Model
-	Output       string
-	ViewPort     viewport.Model
-	ActiveKey    string
-	ActiveField  string
-	ActiveValue  string
-	SelectedOp   string
-	Conn         net.Conn
-	RedisAddress string
-	Reader       *bufio.Reader
+	CurrentState  AppState
+	PreviousState AppState
+	MenuList      list.Model
+	FieldsList    list.Model
+	KeyList       list.Model
+	Input         textinput.Model
+	Output        string
+	ViewPort      viewport.Model
+	ActiveKey     string
+	ActiveField   string
+	ActiveValue   string
+	SelectedOp    string
+	Conn          net.Conn
+	RedisAddress  string
+	Reader        *bufio.Reader
 }
 
 func (m Model) Init() tea.Cmd {
@@ -182,6 +198,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		}
+
 	case tea.WindowSizeMsg:
 		// handle resizing events
 		m.MenuList.SetWidth(msg.Width)
@@ -196,23 +213,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ViewPort.Width = msg.Width
 		m.ViewPort.Height = msg.Height
 
-	case RedisConnectionMsg:
-		conn := msg.Conn
-		if msg.Error != nil {
-			m.Output = msg.Error.Error()
-			m.CurrentState = StateOutput
+	case TickMsg:
+		return m, connectToRedis(m.RedisAddress)
 
-			return m, tea.Quit
+	case RedisConnectionMsg:
+		if msg.Error != nil {
+			return m, waitForNextConnection()
 		}
 
+		conn := msg.Conn
 		// create and set reader
 		reader := bufio.NewReader(conn)
 		m.Reader = reader
 		m.Conn = conn
-		m.CurrentState = StateMenu
+		m.CurrentState = m.PreviousState
 
 	case RedisResultMsg:
 		if msg.Error != nil {
+			var netError net.Error
+			if msg.Error == io.EOF || errors.As(msg.Error, &netError) {
+				// retry connection for connection errors (server restart)
+				if m.CurrentState != StateLoading {
+					m.PreviousState = m.CurrentState
+				}
+				m.CurrentState = StateLoading
+				return m, connectToRedis(m.RedisAddress)
+			}
+
 			m.Output = msg.Error.Error()
 			m.CurrentState = StateOutput
 		}
