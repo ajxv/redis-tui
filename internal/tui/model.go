@@ -59,6 +59,27 @@ type RedisResultMsg struct {
 	Error  error
 }
 
+type RedisConnectionMsg struct {
+	Conn  net.Conn
+	Error error
+}
+
+func connectToRedis(address string) tea.Cmd {
+	return func() tea.Msg {
+		// dial the address
+		conn, err := net.Dial("tcp", address)
+		if err != nil {
+			return RedisConnectionMsg{
+				Error: err,
+			}
+		}
+
+		return RedisConnectionMsg{
+			Conn: conn,
+		}
+	}
+}
+
 func scanRedisKeys(conn net.Conn, reader *bufio.Reader) tea.Cmd {
 	return func() tea.Msg {
 		cursor := "0"
@@ -145,11 +166,12 @@ type Model struct {
 	ActiveValue  string
 	SelectedOp   string
 	Conn         net.Conn
+	RedisAddress string
 	Reader       *bufio.Reader
 }
 
 func (m Model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(connectToRedis(m.RedisAddress), textinput.Blink)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -173,6 +195,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.ViewPort.Width = msg.Width
 		m.ViewPort.Height = msg.Height
+
+	case RedisConnectionMsg:
+		conn := msg.Conn
+		if msg.Error != nil {
+			m.Output = msg.Error.Error()
+			m.CurrentState = StateOutput
+
+			return m, tea.Quit
+		}
+
+		// create and set reader
+		reader := bufio.NewReader(conn)
+		m.Reader = reader
+		m.Conn = conn
+		m.CurrentState = StateMenu
 
 	case RedisResultMsg:
 		if msg.Error != nil {

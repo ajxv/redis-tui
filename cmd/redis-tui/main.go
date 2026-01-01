@@ -1,9 +1,8 @@
 package main
 
 import (
-	"bufio"
+	"flag"
 	"fmt"
-	"net"
 	"os"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -15,6 +14,12 @@ import (
 )
 
 func run() error {
+	// parse cmdline args
+	// define flags
+	host := flag.String("host", "localhost:6379", "Redis Server host: <host:port>")
+	//parse flags
+	flag.Parse()
+
 	// define menu items
 	items := []list.Item{
 		tui.NewListItem("SET", "Set a key-value pair"),
@@ -39,17 +44,6 @@ func run() error {
 	// initialize the input
 	input := textinput.New()
 
-	// conncet to redis
-	conn, err := net.Dial("tcp", "localhost:6379")
-	if err != nil {
-		fmt.Println("Error connecting to Redis: ", err)
-		return err
-	}
-	defer conn.Close()
-
-	// wrap connection in reader
-	reader := bufio.NewReader(conn)
-
 	// initialize viewport
 	vp := viewport.New(0, 0)
 
@@ -61,8 +55,7 @@ func run() error {
 		KeyList:      keyList,
 		Input:        input,
 		ViewPort:     vp,
-		Conn:         conn,
-		Reader:       reader,
+		RedisAddress: *host,
 	}
 
 	// start BubbleTea program
