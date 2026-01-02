@@ -55,9 +55,12 @@ func (li ListItem) FilterValue() string {
 	return li.title
 }
 
-var statusStyle = lipgloss.NewStyle().
+var statusTextStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#04B575")). // A nice bright green
 	Bold(true)
+
+var helpTextStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("241")) // A subtle gray
 
 type RedisResultMsg struct {
 	Result any
@@ -263,13 +266,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch m.SelectedOp {
-		case "GET":
+		case "GET", "HGET":
 			if result, ok := msg.Result.(string); ok {
 				m.Output = result
 				m.CurrentState = StateOutput
 			}
 
-		case "HGET", "HKEYS":
+		case "HKEYS":
 			if result, ok := msg.Result.([]any); ok {
 				var items []list.Item
 				for _, key := range result {
@@ -382,9 +385,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Output = "Unexpected response"
 			}
 
-		case "SET", "HSET":
+		case "SET":
 			if str, ok := msg.Result.(string); ok {
 				m.Output = str
+			} else {
+				m.Output = "Unexpected response"
+			}
+			m.CurrentState = StateOutput
+
+		case "HSET":
+			if num, ok := msg.Result.(int); ok {
+				m.Output = strconv.Itoa(num)
 			} else {
 				m.Output = "Unexpected response"
 			}
@@ -591,7 +602,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							Args: []string{m.ActiveKey, m.ActiveField},
 						}
 
-						m.SelectedOp = "GET" // get already handles the expected response strucuture
+						m.SelectedOp = "HGET"
 						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 					case "EXPLORE_LIST":
@@ -620,11 +631,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StateOutput:
 		keyMsg, ok := msg.(tea.KeyMsg)
-		if ok && keyMsg.String() == "esc" {
-			m.Input.SetValue("")
-			m.CurrentState = StateMenu
-			m.Output = ""
-			return m, nil
+		if ok {
+			switch keyMsg.String() {
+			case "esc":
+				m.Input.SetValue("")
+				m.CurrentState = StateMenu
+				m.Output = ""
+				return m, nil
+
+			case "e":
+				m.Input.SetValue(m.Output)
+				switch m.SelectedOp {
+				case "GET":
+					m.SelectedOp = "SET"
+
+				case "HGET":
+					m.SelectedOp = "HSET"
+				}
+
+				m.Input.Focus()
+				m.CurrentState = StateInputValue
+			}
 		}
 
 	case StateBrowser:
@@ -723,7 +750,8 @@ func (m Model) View() string {
 	case StateInputValue:
 		return "Input the value: \n" + m.Input.View()
 	case StateOutput:
-		return "\nOutput: " + statusStyle.Render(m.Output) + "\n\nPress 'Esc' to return."
+		helpText := helpTextStyle.Render("Esc: Return • e: Edit")
+		return "\nOutput: " + statusTextStyle.Render(m.Output) + "\n\n" + helpText
 	case StateBrowser:
 		return m.KeyList.View()
 	case StateLoading:
