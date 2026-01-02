@@ -32,6 +32,7 @@ const (
 )
 
 type ListItem struct {
+	index int
 	title string
 	desc  string
 }
@@ -189,6 +190,7 @@ type Model struct {
 	ViewPort      viewport.Model
 	ActiveKey     string
 	ActiveField   string
+	ActiveIndex   int
 	ActiveValue   string
 	SelectedOp    string
 	Conn          net.Conn
@@ -297,13 +299,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var items []list.Item
 				for index, key := range resp {
 					if key, ok := key.(string); ok {
-						items = append(items, ListItem{title: key, desc: "Index: " + strconv.Itoa(index)})
+						items = append(items, ListItem{index: index, title: key, desc: "Index: " + strconv.Itoa(index)})
 					}
 				}
 				m.FieldsList.SetItems(items)
 				// change state
 				m.SelectedOp = "EXPLORE_LIST"
 				m.CurrentState = StateFieldSelect
+
 			}
 
 		case "ZRANGE":
@@ -385,7 +388,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Output = "Unexpected response"
 			}
 
-		case "SET":
+		case "SET", "LSET":
 			if str, ok := msg.Result.(string); ok {
 				m.Output = str
 			} else {
@@ -572,6 +575,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
+			case "LSET":
+				cmd := redis.RedisCmd{
+					Name: m.SelectedOp,
+					Args: []string{m.ActiveKey, strconv.Itoa(m.ActiveIndex), m.ActiveValue},
+				}
+
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
 			}
 		}
 
@@ -594,6 +605,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				selectedField := m.FieldsList.SelectedItem()
 				if selectedField, ok := selectedField.(ListItem); ok {
 					m.ActiveField = selectedField.title
+					m.ActiveIndex = selectedField.index
 
 					switch m.SelectedOp {
 					case "HGET", "HKEYS", "EXPLORE":
@@ -647,6 +659,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				case "HGET":
 					m.SelectedOp = "HSET"
+
+				case "EXPLORE_LIST":
+					m.SelectedOp = "LSET"
 				}
 
 				m.Input.Focus()
