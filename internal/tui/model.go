@@ -396,14 +396,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.CurrentState = StateOutput
 
-		case "HSET":
-			if num, ok := msg.Result.(int); ok {
-				m.Output = strconv.Itoa(num)
-			} else {
-				m.Output = "Unexpected response"
-			}
-			m.CurrentState = StateOutput
-
 		case "DEL":
 			m.Output = "Deleted Key: " + m.ActiveKey
 
@@ -424,7 +416,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// refresh the keylist
 			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
-		case "DELETE":
+		case "DELETE", "HSET", "RPUSH", "LREM":
 			if res, ok := msg.Result.(int); ok {
 				m.Output = strconv.Itoa(res)
 			} else {
@@ -443,7 +435,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.SelectedOp = selectedItem.title
 
 				switch m.SelectedOp {
-				case "SET", "GET", "HSET", "HGET", "DELETE":
+				case "SET", "GET", "HSET", "HGET", "DELETE", "RPUSH":
 					m.Input.Focus()
 					m.CurrentState = StateInputKey
 				case "EXPLORE":
@@ -481,7 +473,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
-			case "SET":
+			case "SET", "RPUSH":
 				m.CurrentState = StateInputValue
 
 			case "HSET":
@@ -583,6 +575,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
+			case "RPUSH":
+				// send command
+				cmd := redis.RedisCmd{
+					Name: m.SelectedOp,
+					Args: []string{m.ActiveKey, m.ActiveValue},
+				}
+
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
 			}
 		}
 
@@ -630,7 +631,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					m.PreviousState = m.CurrentState
 					m.CurrentState = StateConfirmation
-					m.SelectedOp = "HDEL"
+
+					// check which mode we are in
+					if m.SelectedOp == "EXPLORE_LIST" {
+						m.SelectedOp = "LREM"
+					} else {
+						m.SelectedOp = "HDEL"
+					}
 
 				}
 
@@ -731,13 +738,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 				case StateFieldSelect:
-					cmd := redis.RedisCmd{
-						Name: "HDEL",
-						Args: []string{m.ActiveKey, m.ActiveField},
-					}
+					switch m.SelectedOp {
+					case "HDEL":
+						cmd := redis.RedisCmd{
+							Name: m.SelectedOp,
+							Args: []string{m.ActiveKey, m.ActiveField},
+						}
 
-					m.SelectedOp = "HDEL"
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
+					case "LREM":
+						cmd := redis.RedisCmd{
+							Name: m.SelectedOp,
+							Args: []string{m.ActiveKey, "1", m.ActiveField}, // removes one instance of element
+						}
+
+						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+					}
 
 				}
 			}
@@ -778,6 +795,9 @@ func (m Model) View() string {
 
 		case "HDEL":
 			return "Are you sure you want to delete the field: " + (m.ActiveField) + "? (y/n)"
+
+		case "LREM":
+			return "Remove one instance of value: " + (m.ActiveField) + "? (y/n)"
 
 		default:
 			return "Are you sure you want to perform this action: " + (m.SelectedOp) + "? (y/n)"
