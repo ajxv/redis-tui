@@ -450,8 +450,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch m.SelectedOp {
 				case "SET", "GET", "HSET", "HGET", "DELETE", "RPUSH":
 					m.Input.Focus()
+					m.PreviousState = m.CurrentState
 					m.CurrentState = StateInputKey
 				case "EXPLORE":
+					m.PreviousState = m.CurrentState
 					return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader))
 				}
 			}
@@ -611,7 +613,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch keyMsg.String() {
 			case "esc":
 				m.Input.SetValue("")
-				m.CurrentState = StateMenu
+				m.CurrentState = m.PreviousState
 				m.Output = ""
 				return m, nil
 
@@ -667,7 +669,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch keyMsg.String() {
 			case "esc":
 				m.Input.SetValue("")
-				m.CurrentState = StateMenu
+				m.CurrentState = m.PreviousState
 				m.Output = ""
 				return m, nil
 
@@ -749,7 +751,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 
 					m.SelectedOp = "DEL"
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
+					// MANUAL LOADING (Preserve History)
+					m.CurrentState = StateLoading
+					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
 
 				case StateFieldSelect:
 					switch m.SelectedOp {
@@ -759,7 +764,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							Args: []string{m.ActiveKey, m.ActiveField},
 						}
 
-						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+						// MANUAL LOADING (Preserve History)
+						m.CurrentState = StateLoading
+						return m, sendRedisCmd(m.Conn, m.Reader, cmd)
 
 					case "LREM":
 						cmd := redis.RedisCmd{
@@ -767,7 +774,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							Args: []string{m.ActiveKey, "1", m.ActiveField}, // removes one instance of element
 						}
 
-						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+						// MANUAL LOADING (Preserve History)
+						m.CurrentState = StateLoading
+						return m, sendRedisCmd(m.Conn, m.Reader, cmd)
 					}
 
 				}
