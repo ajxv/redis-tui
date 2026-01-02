@@ -416,7 +416,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// refresh the keylist
 			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
-		case "DELETE", "HSET", "RPUSH", "LREM":
+		case "LREM":
+			m.Output = "Removed element from list: " + m.ActiveKey
+
+			cmd := redis.RedisCmd{
+				Name: "LRANGE",
+				Args: []string{m.ActiveKey, "0", "-1"},
+			}
+
+			m.SelectedOp = "LRANGE"
+
+			// refresh the keylist
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
+		case "DELETE", "HSET", "RPUSH":
 			if res, ok := msg.Result.(int); ok {
 				m.Output = strconv.Itoa(res)
 			} else {
