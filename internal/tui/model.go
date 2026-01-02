@@ -180,29 +180,45 @@ func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd) tea.C
 }
 
 type Model struct {
-	CurrentState  AppState
-	PreviousState AppState
-	MenuList      list.Model
-	FieldsList    list.Model
-	KeyList       list.Model
-	Input         textinput.Model
-	Output        string
-	ViewPort      viewport.Model
-	ActiveKey     string
-	ActiveField   string
-	ActiveIndex   int
-	ActiveValue   string
-	SelectedOp    string
-	Conn          net.Conn
-	RedisAddress  string
-	Reader        *bufio.Reader
+	CurrentState           AppState
+	StateNavigationHistory []AppState
+	MenuList               list.Model
+	FieldsList             list.Model
+	KeyList                list.Model
+	Input                  textinput.Model
+	Output                 string
+	ViewPort               viewport.Model
+	ActiveKey              string
+	ActiveField            string
+	ActiveIndex            int
+	ActiveValue            string
+	SelectedOp             string
+	Conn                   net.Conn
+	RedisAddress           string
+	Reader                 *bufio.Reader
+}
+
+func (m *Model) pushState(state AppState) {
+	// push state onto stack
+	m.StateNavigationHistory = append(m.StateNavigationHistory, state)
+}
+
+func (m *Model) popState() AppState {
+	if len(m.StateNavigationHistory) == 0 {
+		return StateMenu
+	}
+
+	// get last state
+	lastIndex := len(m.StateNavigationHistory) - 1
+	lastState := m.StateNavigationHistory[lastIndex]
+
+	// remove last state from stack
+	m.StateNavigationHistory = m.StateNavigationHistory[:lastIndex]
+
+	return lastState
 }
 
 func (m Model) switchToLoadingAndExecute(cmd tea.Cmd) (tea.Model, tea.Cmd) {
-	// save current state
-	if m.CurrentState != StateLoading {
-		m.PreviousState = m.CurrentState
-	}
 	// change to loading state
 	m.CurrentState = StateLoading
 
@@ -249,7 +265,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reader := bufio.NewReader(conn)
 		m.Reader = reader
 		m.Conn = conn
-		m.CurrentState = m.PreviousState
+
+		if m.CurrentState == StateLoading {
+			m.CurrentState = m.popState()
+		}
 
 	case RedisResultMsg:
 		if msg.Error != nil {
@@ -257,7 +276,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Error == io.EOF || errors.As(msg.Error, &netError) {
 				// retry connection for connection errors (server restart)
 				if m.CurrentState != StateLoading {
-					m.PreviousState = m.CurrentState
+					m.pushState(m.CurrentState)
 				}
 				m.CurrentState = StateLoading
 				return m, connectToRedis(m.RedisAddress)
@@ -447,13 +466,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if selectedItem, ok := selectedItem.(ListItem); ok {
 				m.SelectedOp = selectedItem.title
 
+				// save state history
+				m.pushState(m.CurrentState)
+
 				switch m.SelectedOp {
 				case "SET", "GET", "HSET", "HGET", "DELETE", "RPUSH":
 					m.Input.Focus()
-					m.PreviousState = m.CurrentState
 					m.CurrentState = StateInputKey
 				case "EXPLORE":
-					m.PreviousState = m.CurrentState
 					return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader))
 				}
 			}
@@ -467,8 +487,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		keyMsg, ok := msg.(tea.KeyMsg)
 		if ok && keyMsg.String() == "esc" {
 			m.Input.SetValue("")
-			m.CurrentState = StateMenu
 			m.Output = ""
+			m.CurrentState = m.popState()
 			return m, nil
 		}
 
@@ -489,9 +509,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
 			case "SET", "RPUSH":
+				m.pushState(m.CurrentState)
 				m.CurrentState = StateInputValue
 
 			case "HSET":
+				m.pushState(m.CurrentState)
 				m.CurrentState = StateInputField
 
 			case "HGET":
@@ -524,8 +546,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		keyMsg, ok := msg.(tea.KeyMsg)
 		if ok && keyMsg.String() == "esc" {
 			m.Input.SetValue("")
-			m.CurrentState = StateMenu
 			m.Output = ""
+			m.CurrentState = m.popState()
 			return m, nil
 		}
 
@@ -537,6 +559,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// decide where to go next
 			switch m.SelectedOp {
 			case "HSET":
+				m.pushState(m.CurrentState)
 				m.CurrentState = StateInputValue
 			}
 
@@ -552,8 +575,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		keyMsg, ok := msg.(tea.KeyMsg)
 		if ok && keyMsg.String() == "esc" {
 			m.Input.SetValue("")
-			m.CurrentState = StateMenu
-			m.Output = ""
+			m.CurrentState = m.popState()
 			return m, nil
 		}
 
@@ -613,8 +635,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch keyMsg.String() {
 			case "esc":
 				m.Input.SetValue("")
-				m.CurrentState = m.PreviousState
 				m.Output = ""
+				m.CurrentState = m.popState()
 				return m, nil
 
 			case "enter":
@@ -622,6 +644,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if selectedField, ok := selectedField.(ListItem); ok {
 					m.ActiveField = selectedField.title
 					m.ActiveIndex = selectedField.index
+
+					// save state history
+					m.pushState(m.CurrentState)
 
 					switch m.SelectedOp {
 					case "HGET", "HKEYS", "EXPLORE":
@@ -639,12 +664,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
+				return m, nil
+
 			case "d":
 				selectedField := m.FieldsList.SelectedItem()
 				if selectedField, ok := selectedField.(ListItem); ok {
 					m.ActiveField = selectedField.title
 
-					m.PreviousState = m.CurrentState
+					m.pushState(m.CurrentState)
 					m.CurrentState = StateConfirmation
 
 					// check which mode we are in
@@ -656,11 +683,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				}
 
+				return m, nil
+
 			}
 		}
 
-		updatedModel, cmd := m.FieldsList.Update(msg)
-		m.FieldsList = updatedModel
+		var cmd tea.Cmd
+		m.FieldsList, cmd = m.FieldsList.Update(msg)
 		return m, cmd
 
 	case StateOutput:
@@ -669,8 +698,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch keyMsg.String() {
 			case "esc":
 				m.Input.SetValue("")
-				m.CurrentState = m.PreviousState
 				m.Output = ""
+
+				previousState := m.popState()
+				// 1. Handle the "Edit Loop" artifact
+				// If the previous state was ALSO Output, pop one more time to find the List.
+				if previousState == StateOutput {
+					previousState = m.popState()
+				}
+
+				// 2. Handle the "Creation Flow" (Hard Reset)
+				if previousState == StateInputKey || previousState == StateInputField {
+					m.StateNavigationHistory = []AppState{} // Clear history
+					m.CurrentState = StateMenu              // Go to Menu
+					return m, nil
+				}
+
+				// 3. Fallback: Go to the previous state (Browser or List)
+				m.CurrentState = previousState
+
+				// 4. GLOBAL CLEANUP: Reset the Op Mode
+				// This ensures that 'Enter' works again when we land on the List.
+				switch m.SelectedOp {
+				case "LSET":
+					m.SelectedOp = "EXPLORE_LIST"
+				case "HSET":
+					m.SelectedOp = "HKEYS"
+				}
+
 				return m, nil
 
 			case "e":
@@ -688,6 +743,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				m.Input.Focus()
 				m.Input.CursorEnd()
+				m.pushState(m.CurrentState)
 				m.CurrentState = StateInputValue
 			}
 		}
@@ -698,14 +754,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch keyMsg.String() {
 			case "esc":
 				m.Input.SetValue("")
-				m.CurrentState = StateMenu
 				m.Output = ""
+				m.CurrentState = m.popState()
 				return m, nil
 
 			case "enter":
 				selectedKey := m.KeyList.SelectedItem()
 				if selectedKey, ok := selectedKey.(ListItem); ok {
 					m.ActiveKey = selectedKey.title
+
+					// save state history
+					m.pushState(m.CurrentState)
 
 					cmd := redis.RedisCmd{
 						Name: "TYPE",
@@ -721,7 +780,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if selectedKey, ok := selectedKey.(ListItem); ok {
 					m.ActiveKey = selectedKey.title
 
-					m.PreviousState = m.CurrentState
+					m.pushState(m.CurrentState)
 					m.CurrentState = StateConfirmation
 					m.SelectedOp = "DEL"
 				}
@@ -738,48 +797,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if ok {
 			switch keyMsg.String() {
 			case "esc", "n", "N":
-				m.CurrentState = m.PreviousState
-
+				m.CurrentState = m.popState()
 				return m, nil
 
 			case "y", "Y":
-				switch m.PreviousState {
-				case StateBrowser:
+
+				m.popState()
+
+				switch m.SelectedOp {
+				case "DEL":
 					cmd := redis.RedisCmd{
-						Name: "DEL",
+						Name: m.SelectedOp,
 						Args: []string{m.ActiveKey},
 					}
-
-					m.SelectedOp = "DEL"
 
 					// MANUAL LOADING (Preserve History)
 					m.CurrentState = StateLoading
 					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
 
-				case StateFieldSelect:
-					switch m.SelectedOp {
-					case "HDEL":
-						cmd := redis.RedisCmd{
-							Name: m.SelectedOp,
-							Args: []string{m.ActiveKey, m.ActiveField},
-						}
-
-						// MANUAL LOADING (Preserve History)
-						m.CurrentState = StateLoading
-						return m, sendRedisCmd(m.Conn, m.Reader, cmd)
-
-					case "LREM":
-						cmd := redis.RedisCmd{
-							Name: m.SelectedOp,
-							Args: []string{m.ActiveKey, "1", m.ActiveField}, // removes one instance of element
-						}
-
-						// MANUAL LOADING (Preserve History)
-						m.CurrentState = StateLoading
-						return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+				case "HDEL":
+					cmd := redis.RedisCmd{
+						Name: m.SelectedOp,
+						Args: []string{m.ActiveKey, m.ActiveField},
 					}
 
+					// MANUAL LOADING (Preserve History)
+					m.CurrentState = StateLoading
+					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+
+				case "LREM":
+					cmd := redis.RedisCmd{
+						Name: m.SelectedOp,
+						Args: []string{m.ActiveKey, "1", m.ActiveField}, // removes one instance of element
+					}
+
+					// MANUAL LOADING (Preserve History)
+					m.CurrentState = StateLoading
+					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
 				}
+
 			}
 		}
 
