@@ -37,6 +37,7 @@ func run() error {
 		tui.NewListItem("HGET", "Get the value of a hash field"),
 		tui.NewListItem("RPUSH", "Add value to the end of a list"),
 		tui.NewListItem("SADD", "Add value to a set"),
+		tui.NewListItem("ZADD", "Add value to a sorted set"),
 		tui.NewListItem("DELETE", "Delete a key-value pair or an entire hash"),
 		tui.NewListItem("EXPLORE", "Browse keys and values"),
 	}
