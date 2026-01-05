@@ -313,7 +313,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.CurrentState = StateBrowser
 			}
 
-		case "LRANGE", "SMEMBERS":
+		case "LRANGE":
 			if resp, ok := msg.Result.([]any); ok {
 				var items []list.Item
 				for index, key := range resp {
@@ -324,6 +324,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.FieldsList.SetItems(items)
 				// change state
 				m.SelectedOp = "EXPLORE_LIST"
+				m.CurrentState = StateFieldSelect
+
+			}
+
+		case "SMEMBERS":
+			if resp, ok := msg.Result.([]any); ok {
+				var items []list.Item
+				for index, key := range resp {
+					if key, ok := key.(string); ok {
+						items = append(items, ListItem{index: index, title: key, desc: "Index: " + strconv.Itoa(index)})
+					}
+				}
+				m.FieldsList.SetItems(items)
+				// change state
+				m.SelectedOp = "EXPLORE_SET"
 				m.CurrentState = StateFieldSelect
 
 			}
@@ -448,7 +463,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// refresh the keylist
 			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
-		case "DELETE", "HSET", "RPUSH":
+		case "SREM":
+			m.Output = "Removed element from set: " + m.ActiveKey
+
+			cmd := redis.RedisCmd{
+				Name: "SMEMBERS",
+				Args: []string{m.ActiveKey},
+			}
+
+			m.SelectedOp = "SMEMBERS"
+
+			// refresh the keylist
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+
+		case "DELETE", "HSET", "RPUSH", "SADD":
 			if res, ok := msg.Result.(int); ok {
 				m.Output = strconv.Itoa(res)
 			} else {
@@ -470,7 +498,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pushState(m.CurrentState)
 
 				switch m.SelectedOp {
-				case "SET", "GET", "HSET", "HGET", "DELETE", "RPUSH":
+				case "SET", "GET", "HSET", "HGET", "DELETE", "RPUSH", "SADD":
 					m.Input.Focus()
 					m.CurrentState = StateInputKey
 				case "EXPLORE":
@@ -508,7 +536,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
-			case "SET", "RPUSH":
+			case "SET", "RPUSH", "SADD":
 				m.pushState(m.CurrentState)
 				m.CurrentState = StateInputValue
 
@@ -612,7 +640,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
-			case "RPUSH":
+			case "RPUSH", "SADD":
 				// send command
 				cmd := redis.RedisCmd{
 					Name: m.SelectedOp,
@@ -675,9 +703,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.CurrentState = StateConfirmation
 
 					// check which mode we are in
-					if m.SelectedOp == "EXPLORE_LIST" {
+					switch m.SelectedOp {
+					case "EXPLORE_LIST":
 						m.SelectedOp = "LREM"
-					} else {
+					case "EXPLORE_SET":
+						m.SelectedOp = "SREM"
+					default:
 						m.SelectedOp = "HDEL"
 					}
 
@@ -834,6 +865,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// MANUAL LOADING (Preserve History)
 					m.CurrentState = StateLoading
 					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+
+				case "SREM":
+					cmd := redis.RedisCmd{
+						Name: m.SelectedOp,
+						Args: []string{m.ActiveKey, m.ActiveField},
+					}
+
+					// MANUAL LOADING (Preserve History)
+					m.CurrentState = StateLoading
+					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
+
 				}
 
 			}
