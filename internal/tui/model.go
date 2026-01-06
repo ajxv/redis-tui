@@ -910,14 +910,31 @@ func (m Model) View() string {
 	switch m.CurrentState {
 	case StateMenu:
 		return m.MenuList.View()
+
 	case StateInputKey:
 		return "Input the key: \n" + m.Input.View()
+
 	case StateInputField:
+		switch m.SelectedOp {
+		case "ZADD":
+			return "Input the score: \n" + m.Input.View()
+
+		}
+
 		return "Input the field: \n" + m.Input.View()
+
 	case StateFieldSelect:
 		return m.FieldsList.View()
+
 	case StateInputValue:
+		switch m.SelectedOp {
+		case "SADD", "ZADD":
+			return "Input the member: \n" + m.Input.View()
+
+		}
+
 		return "Input the value: \n" + m.Input.View()
+
 	case StateOutput:
 		helpText := helpTextStyle.Render("Esc: Return • e: Edit")
 		return "\nOutput: " + statusTextStyle.Render(m.Output) + "\n\n" + helpText
@@ -935,6 +952,9 @@ func (m Model) View() string {
 
 		case "LREM":
 			return "Remove one instance of value: " + (m.ActiveField) + "? (y/n)"
+
+		case "SREM", "ZREM":
+			return "Are you sure you want to delete the set member: " + (m.ActiveField) + "? (y/n)"
 
 		default:
 			return "Are you sure you want to perform this action: " + (m.SelectedOp) + "? (y/n)"
