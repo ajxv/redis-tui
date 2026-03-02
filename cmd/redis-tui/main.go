@@ -64,9 +64,14 @@ func run() error {
 	initialModel := tui.Model{
 		CurrentState: tui.StateMenu,
 		MenuList:     menuList,
-		FieldsList:   fieldsList,
-		KeyList:      keyList,
-		Input:        input,
+		Browser: tui.BrowserModel{
+			KeyList:       keyList,
+			FieldsList:    fieldsList,
+			ViewingFields: false,
+		},
+		Input: tui.InputModel{
+			Input: input,
+		},
 		ViewPort:     vp,
 		RedisAddress: *host,
 	}
