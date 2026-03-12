@@ -35,3 +35,6 @@ bubbletea-cache/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Compiled binary
+redis-tui

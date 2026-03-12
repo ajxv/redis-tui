@@ -18,6 +18,8 @@ func run() error {
 	// parse cmdline args
 	// define flags
 	host := flag.String("host", "localhost:6379", "Redis Server host: <host:port>")
+	password := flag.String("password", "", "Redis Server password")
+	db := flag.Int("db", 0, "Redis Database index")
 	//parse flags
 	flag.Parse()
 
@@ -74,6 +76,8 @@ func run() error {
 		},
 		ViewPort:     vp,
 		RedisAddress: *host,
+		Password:     *password,
+		DB:           *db,
 	}
 
 	// start BubbleTea program

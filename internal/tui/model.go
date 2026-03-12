@@ -60,10 +60,51 @@ func waitForNextConnection() tea.Cmd {
 	}
 }
 
-func connectToRedis(address string) tea.Cmd {
+func connectToRedis(address string, password string, db int) tea.Cmd {
 	return func() tea.Msg {
 		// dial the address
 		conn, err := net.Dial("tcp", address)
+		if err != nil {
+			return RedisConnectionMsg{
+				Error: err,
+			}
+		}
+
+		reader := bufio.NewReader(conn)
+
+		if password != "" {
+			cmd := redis.RedisCmd{
+				Name: "AUTH",
+				Args: []string{password},
+			}
+
+			_, err = conn.Write(cmd.ToBytes())
+			if err != nil {
+				return RedisConnectionMsg{
+					Error: err,
+				}
+			}
+			_, err = redis.ReadResp(reader)
+			if err != nil {
+				return RedisConnectionMsg{
+					Error: err,
+				}
+			}
+		}
+
+		// select db
+		cmd := redis.RedisCmd{
+			Name: "SELECT",
+			Args: []string{strconv.Itoa(db)},
+		}
+
+		_, err = conn.Write(cmd.ToBytes())
+		if err != nil {
+			return RedisConnectionMsg{
+				Error: err,
+			}
+		}
+		_, err = redis.ReadResp(reader)
 		if err != nil {
 			return RedisConnectionMsg{
 				Error: err,
@@ -76,10 +117,10 @@ func connectToRedis(address string) tea.Cmd {
 	}
 }
 
-func scanRedisKeys(conn net.Conn, reader *bufio.Reader) tea.Cmd {
+func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string) tea.Cmd {
 	return func() tea.Msg {
 		cursor := "0"
-		filter := "*"
+		filter := pattern
 		var keys []list.Item
 		for {
 			cmd := redis.RedisCmd{
@@ -168,6 +209,9 @@ type Model struct {
 	SelectedOp             string
 	Conn                   net.Conn
 	RedisAddress           string
+	Password               string
+	DB                     int
+	LastPattern            string
 	Reader                 *bufio.Reader
 	Browser                BrowserModel
 }
@@ -200,7 +244,7 @@ func (m Model) switchToLoadingAndExecute(cmd tea.Cmd) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(connectToRedis(m.RedisAddress), textinput.Blink)
+	return tea.Batch(connectToRedis(m.RedisAddress, m.Password, m.DB), textinput.Blink)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -234,6 +278,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// decide where to go next
 			switch m.SelectedOp {
+			case "EXPLORE":
+				m.LastPattern = m.ActiveKey
+				return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, m.ActiveKey))
 			case "GET":
 				// send command
 				cmd := redis.RedisCmd{
@@ -395,7 +442,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ViewPort.Height = msg.Height
 
 	case TickMsg:
-		return m, connectToRedis(m.RedisAddress)
+		return m, connectToRedis(m.RedisAddress, m.Password, m.DB)
 
 	case RedisConnectionMsg:
 		if msg.Error != nil {
@@ -421,7 +468,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pushState(m.CurrentState)
 				}
 				m.CurrentState = StateLoading
-				return m, connectToRedis(m.RedisAddress)
+				return m, connectToRedis(m.RedisAddress, m.Password, m.DB)
 			}
 
 			m.Output = msg.Error.Error()
@@ -592,8 +639,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Output = "Deleted Key: " + m.ActiveKey
 
 			m.SelectedOp = "EXPLORE"
-			// refresh the keylist
-			return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader))
+			// refresh the keylist using the last pattern searched
+			pattern := m.LastPattern
+			if pattern == "" {
+				pattern = "*"
+			}
+			return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, pattern))
 
 		case "HDEL":
 			m.Output = "Deleted Hash Key: " + m.ActiveKey
@@ -674,7 +725,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.CurrentState = StateInputKey
 					m.Input.Type = InputKey
 				case "EXPLORE":
-					return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader))
+					m.Input.Input.Focus()
+					m.Input.Input.SetValue("*") // Default search is everything
+					m.CurrentState = StateInputKey
+					m.Input.Type = InputKey
 				}
 			}
 		}
