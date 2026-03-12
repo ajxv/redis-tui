@@ -38,6 +38,11 @@ var statusTextStyle = lipgloss.NewStyle().
 var helpTextStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("241")) // A subtle gray
 
+type ScanResult struct {
+	Cursor string
+	Keys   []list.Item
+}
+
 type RedisResultMsg struct {
 	Result any
 	Error  error
@@ -117,50 +122,43 @@ func connectToRedis(address string, password string, db int) tea.Cmd {
 	}
 }
 
-func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string) tea.Cmd {
+func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor string) tea.Cmd {
 	return func() tea.Msg {
-		cursor := "0"
 		filter := pattern
 		var keys []list.Item
-		for {
-			cmd := redis.RedisCmd{
-				Name: "SCAN",
-				Args: []string{cursor, "MATCH", filter},
-			}
-			_, err := conn.Write(cmd.ToBytes())
-			if err != nil {
-				return RedisResultMsg{
-					Error: err,
-				}
-			}
-			response, err := redis.ReadResp(reader)
-			if err != nil {
-				return RedisResultMsg{
-					Error: err,
-				}
-			}
-			if resp, ok := response.([]any); ok {
-				if c, ok := resp[0].(string); ok {
-					cursor = c
-				}
 
-				if slice, ok := resp[1].([]any); ok {
-					for _, str := range slice {
-						if s, ok := str.(string); ok {
-							keys = append(keys, ListItem{title: s, desc: "key"})
-						}
+		cmd := redis.RedisCmd{
+			Name: "SCAN",
+			Args: []string{cursor, "MATCH", filter},
+		}
+		_, err := conn.Write(cmd.ToBytes())
+		if err != nil {
+			return RedisResultMsg{
+				Error: err,
+			}
+		}
+		response, err := redis.ReadResp(reader)
+		if err != nil {
+			return RedisResultMsg{
+				Error: err,
+			}
+		}
+		if resp, ok := response.([]any); ok {
+			if c, ok := resp[0].(string); ok {
+				cursor = c
+			}
+
+			if slice, ok := resp[1].([]any); ok {
+				for _, str := range slice {
+					if s, ok := str.(string); ok {
+						keys = append(keys, ListItem{title: s, desc: "key"})
 					}
 				}
-			}
-
-			// break if no more records
-			if cursor == "0" {
-				break
 			}
 		}
 
 		return RedisResultMsg{
-			Result: keys,
+			Result: ScanResult{Cursor: cursor, Keys: keys},
 		}
 	}
 }
@@ -280,7 +278,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.SelectedOp {
 			case "EXPLORE":
 				m.LastPattern = m.ActiveKey
-				return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, m.ActiveKey))
+				m.Browser.Cursor = "0"
+				m.Browser.Pattern = m.ActiveKey
+				return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, m.ActiveKey, "0"))
 			case "GET":
 				// send command
 				cmd := redis.RedisCmd{
@@ -459,6 +459,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.CurrentState = m.popState()
 		}
 
+	case LoadMoreKeysMsg:
+		return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, m.Browser.Pattern, m.Browser.Cursor))
+
 	case RedisResultMsg:
 		if msg.Error != nil {
 			var netError net.Error
@@ -500,9 +503,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "EXPLORE":
-			if result, ok := msg.Result.([]list.Item); ok {
-				// update browsers keylist
-				m.Browser.KeyList.SetItems(result)
+			if result, ok := msg.Result.(ScanResult); ok {
+				if m.Browser.Cursor == "0" || m.Browser.Cursor == "" {
+					// update browsers keylist entirely
+					m.Browser.KeyList.SetItems(result.Keys)
+				} else {
+					// append to the current list
+					items := m.Browser.KeyList.Items()
+					for _, k := range result.Keys {
+						items = append(items, k)
+					}
+					m.Browser.KeyList.SetItems(items)
+				}
+				m.Browser.Cursor = result.Cursor
 				m.Browser.ViewingFields = false
 				m.CurrentState = StateBrowser
 			}
@@ -644,7 +657,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if pattern == "" {
 				pattern = "*"
 			}
-			return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, pattern))
+			m.Browser.Cursor = "0"
+			m.Browser.Pattern = pattern
+			return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, pattern, "0"))
 
 		case "HDEL":
 			m.Output = "Deleted Hash Key: " + m.ActiveKey

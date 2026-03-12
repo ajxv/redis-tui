@@ -46,6 +46,9 @@ type BrowserModel struct {
 
 	Conn   net.Conn
 	Reader *bufio.Reader
+
+	Cursor  string
+	Pattern string
 }
 
 func (m BrowserModel) Init() tea.Cmd {
@@ -70,6 +73,8 @@ type DeleteRequestMsg struct {
 	Key   string
 	Field string
 }
+
+type LoadMoreKeysMsg struct{}
 
 func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 	var cmd tea.Cmd
@@ -105,6 +110,13 @@ func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 							Key: selectedKey.Title(),
 						}
 					}
+				}
+			}
+
+		case "n":
+			if !m.ViewingFields && m.Cursor != "0" {
+				return m, func() tea.Msg {
+					return LoadMoreKeysMsg{}
 				}
 			}
 
