@@ -81,6 +81,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SelectKeyMsg:
 		m.ActiveKey = msg.Key
 
+		m.pushState(m.CurrentState)
+
 		cmd := redis.RedisCmd{
 			Name: "TYPE",
 			Args: []string{m.ActiveKey},
@@ -92,16 +94,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case InputCompleteMsg:
 		// Handle the data based on what kind of input it was
 		switch msg.Type {
-		case InputKey:
+		case InputPattern:
 			m.ActiveKey = msg.Value
-
-			// decide where to go next
 			switch m.SelectedOp {
 			case "EXPLORE":
 				m.LastPattern = m.ActiveKey
 				m.Browser.Cursor = "0"
 				m.Browser.Pattern = m.ActiveKey
 				return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, m.ActiveKey, "0"))
+			}
+
+		case InputKey:
+			m.ActiveKey = msg.Value
+
+			// decide where to go next
+			switch m.SelectedOp {
 			case "GET":
 				// send command
 				cmd := redis.RedisCmd{
@@ -564,7 +571,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.Input.Input.Focus()
 					m.Input.Input.SetValue("*") // Default search is everything
 					m.CurrentState = StateInputKey
-					m.Input.Type = InputKey
+					m.Input.Type = InputPattern
 				}
 			}
 		}

@@ -83,6 +83,10 @@ func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
+			if m.ViewingFields {
+				m.ViewingFields = false
+				return m, nil
+			}
 			return m, func() tea.Msg {
 				return BackMsg{}
 			}
