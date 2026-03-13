@@ -105,9 +105,30 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 			}
 
 			if slice, ok := resp[1].([]any); ok {
+				var rawKeys []string
 				for _, str := range slice {
 					if s, ok := str.(string); ok {
-						keys = append(keys, ListItem{title: s, desc: "key"})
+						rawKeys = append(rawKeys, s)
+					}
+				}
+
+				if len(rawKeys) > 0 {
+					// Pipeline TYPE commands
+					for _, k := range rawKeys {
+						cmd := redis.RedisCmd{Name: "TYPE", Args: []string{k}}
+						conn.Write(cmd.ToBytes())
+					}
+
+					// Read piplined responses
+					for _, k := range rawKeys {
+						desc := "key"
+						typeResp, err := redis.ReadResp(reader)
+						if err == nil {
+							if typeStr, ok := typeResp.(string); ok {
+								desc = typeStr
+							}
+						}
+						keys = append(keys, ListItem{title: k, desc: desc})
 					}
 				}
 			}

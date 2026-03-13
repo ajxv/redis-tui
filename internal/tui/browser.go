@@ -154,8 +154,15 @@ func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 }
 
 func (m BrowserModel) View() string {
+	var listView string
+	var helpText string
+
 	if m.ViewingFields {
-		return m.FieldsList.View()
+		listView = m.FieldsList.View()
+		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete")
+	} else {
+		listView = m.KeyList.View()
+		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • n: load more")
 	}
-	return m.KeyList.View()
+	return listView + "\n" + helpText
 }

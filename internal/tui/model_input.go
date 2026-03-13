@@ -73,5 +73,6 @@ func (m InputModel) View() string {
 	}
 
 	// Return the title + newline + the text input view
-	return title + "\n" + m.Input.View()
+	helpText := helpTextStyle.Render("esc: return • enter: submit")
+	return title + "\n" + m.Input.View() + "\n\n" + helpText
 }
