@@ -23,8 +23,8 @@ func waitForNextConnection() tea.Cmd {
 
 func connectToRedis(address string, password string, db int) tea.Cmd {
 	return func() tea.Msg {
-		// dial the address
-		conn, err := net.Dial("tcp", address)
+		// dial the address with a timeout
+		conn, err := net.DialTimeout("tcp", address, 5*time.Second)
 		if err != nil {
 			return RedisConnectionMsg{
 				Error: err,
@@ -167,5 +167,29 @@ func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd) tea.C
 		return RedisResultMsg{
 			Result: response,
 		}
+	}
+}
+
+func fetchTTL(conn net.Conn, reader *bufio.Reader, key string) tea.Cmd {
+	return func() tea.Msg {
+		if conn == nil {
+			return RedisTTLResultMsg{TTL: -2}
+		}
+		cmd := redis.RedisCmd{
+			Name: "TTL",
+			Args: []string{key},
+		}
+		_, err := conn.Write(cmd.ToBytes())
+		if err != nil {
+			return RedisTTLResultMsg{TTL: -2}
+		}
+		response, err := redis.ReadResp(reader)
+		if err != nil {
+			return RedisTTLResultMsg{TTL: -2}
+		}
+		if ttl, ok := response.(int); ok {
+			return RedisTTLResultMsg{TTL: ttl}
+		}
+		return RedisTTLResultMsg{TTL: -2}
 	}
 }

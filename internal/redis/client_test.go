@@ -110,7 +110,7 @@ func TestReadResp_Partial(t *testing.T) {
 	input := "*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$5\r\nmyval\r\n"
 	reader := bufio.NewReader(bytes.NewReader([]byte(input)))
 	result, err := ReadResp(reader)
-	
+
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}

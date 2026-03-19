@@ -1,9 +1,6 @@
 package tui
 
 import (
-	"bufio"
-	"net"
-
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -44,9 +41,6 @@ type BrowserModel struct {
 	// Helper to track which list we are looking at
 	ViewingFields bool
 
-	Conn   net.Conn
-	Reader *bufio.Reader
-
 	Cursor  string
 	Pattern string
 }
@@ -76,12 +70,24 @@ type DeleteRequestMsg struct {
 
 type LoadMoreKeysMsg struct{}
 
+type RenameRequestMsg struct {
+	Key string
+}
+
+type RefreshMsg struct{}
+
+
 func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "ctrl+r", "f5":
+			return m, func() tea.Msg {
+				return RefreshMsg{}
+			}
+
 		case "esc":
 			if m.ViewingFields {
 				m.ViewingFields = false
@@ -133,13 +139,24 @@ func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 							Key:   m.ActiveKey,
 							Field: item.Title(),
 						}
-
 					}
 				}
 			} else {
 				if item, ok := m.KeyList.SelectedItem().(ListItem); ok {
 					return m, func() tea.Msg {
 						return DeleteRequestMsg{
+							Key: item.Title(),
+						}
+					}
+				}
+			}
+
+		case "r":
+			// only allow rename from the key list (not field list)
+			if !m.ViewingFields {
+				if item, ok := m.KeyList.SelectedItem().(ListItem); ok {
+					return m, func() tea.Msg {
+						return RenameRequestMsg{
 							Key: item.Title(),
 						}
 					}
@@ -163,10 +180,10 @@ func (m BrowserModel) View() string {
 
 	if m.ViewingFields {
 		listView = m.FieldsList.View()
-		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete")
+		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • ctrl+r: refresh")
 	} else {
 		listView = m.KeyList.View()
-		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • n: load more")
+		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • r: rename • n: load more • ctrl+r: refresh")
 	}
 	return listView + "\n" + helpText
 }

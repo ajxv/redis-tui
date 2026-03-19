@@ -12,6 +12,19 @@ An interactive, fast, and lightweight Terminal User Interface (TUI) for explorin
 - **Lightweight & Fast:** Custom RESP parser under the hood with minimal dependencies.
 - **Cross-Platform:** Works on Linux, macOS, and Windows environments.
 
+## Prerequisites
+
+Redis TUI works out of the box on **macOS** and **Windows**.
+
+On **Linux**, the clipboard copy feature (`c` key) requires one of the following packages:
+
+| Display Server | Package | Install |
+| :--- | :--- | :--- |
+| X11 | `xclip` or `xsel` | `sudo apt install xclip` |
+| Wayland | `wl-clipboard` | `sudo apt install wl-clipboard` |
+
+All other features work on Linux without any additional dependencies.
+
 ## Installation
 
 ### Option 1: Using Go Install
@@ -53,7 +66,10 @@ redis-tui -host "127.0.0.1:6379" -password "mysecr3t" -db 0
 * `↑ / ↓` or `k / j`: Navigate lists
 * `Enter`: Select an item or submit a form
 * `Esc`: Go back or cancel an operation
-* `e`: Edit the current value (only available when viewing a value)
+* `e`: Edit the current value
+* `c`: Copy output value to clipboard
+* `r`: Rename the current key
+* `x`: Set or clear a TTL expiry on the current key (use `0` to persist)
 * `d`: Delete the highlighted key or field (with confirmation)
 * `n`: Load more keys (pagination in Explorer mode)
 * `Ctrl+C`: Quit the application

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,6 +43,7 @@ func run() error {
 		tui.NewListItem("ZADD", "Add value to a sorted set"),
 		tui.NewListItem("DELETE", "Delete a key-value pair or an entire hash"),
 		tui.NewListItem("EXPLORE", "Browse keys and values"),
+		tui.NewListItem("INFO", "View Redis server statistics"),
 	}
 
 	// initialize the menu list
@@ -71,6 +73,7 @@ func run() error {
 			FieldsList:    fieldsList,
 			ViewingFields: false,
 		},
+		Spinner: spinner.New(spinner.WithSpinner(spinner.Dot)),
 		Input: tui.InputModel{
 			Input: input,
 		},
