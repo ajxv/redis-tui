@@ -44,6 +44,10 @@ func run() error {
 		tui.NewListItem("DELETE", "Delete a key-value pair or an entire hash"),
 		tui.NewListItem("EXPLORE", "Browse keys and values"),
 		tui.NewListItem("INFO", "View Redis server statistics"),
+		tui.NewListItem("EXPORT", "Export a key to a file via DUMP"),
+		tui.NewListItem("IMPORT", "Import a key from a file via RESTORE"),
+		tui.NewListItem("EXPORT_DB", "Export the entire database to a JSON file"),
+		tui.NewListItem("IMPORT_DB", "Import the entire database from a JSON file"),
 	}
 
 	// initialize the menu list

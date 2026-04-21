@@ -15,6 +15,7 @@ const (
 	InputScore
 	InputMember
 	InputPattern
+	InputFilePath
 )
 
 type InputCompleteMsg struct {
@@ -71,6 +72,8 @@ func (m InputModel) View() string {
 		title = "Input the Member:"
 	case InputPattern:
 		title = "Input the search pattern:"
+	case InputFilePath:
+		title = "Input the destination/source file path:"
 	default:
 		return ""
 	}

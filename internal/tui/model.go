@@ -152,6 +152,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
+			case OpExport:
+				m.pushState(m.CurrentState)
+				m.CurrentState = StateInputFilePath
+				m.Input.Type = InputFilePath
+				// clear previous input
+				m.Input.Input.SetValue("")
+
 			case OpDelete:
 				cmd := redis.RedisCmd{
 					Name: "DEL",
@@ -238,6 +245,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
 
+			}
+
+		case InputFilePath:
+			filePath := msg.Value
+
+			switch m.SelectedOp {
+			case OpExport:
+				return m.switchToLoadingAndExecute(exportSingleKey(m.Conn, m.Reader, m.ActiveKey, filePath))
+			case OpImport:
+				return m.switchToLoadingAndExecute(importSingleKeyOrDB(m.Conn, m.Reader, filePath))
+			case OpExportDB:
+				return m.switchToLoadingAndExecute(exportFullDB(m.Conn, m.Reader, filePath))
+			case OpImportDB:
+				return m.switchToLoadingAndExecute(importSingleKeyOrDB(m.Conn, m.Reader, filePath))
 			}
 		}
 
@@ -386,6 +407,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.Output = msg.Error.Error()
 			m.CurrentState = StateOutput
+			return m, nil
 		}
 
 		switch m.SelectedOp {
@@ -563,7 +585,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.CurrentState = StateOutput
 			}
 
-		case OpSet, OpLSet, OpRename, OpExpirySet:
+		case OpSet, OpLSet, OpRename, OpExpirySet, OpExport, OpImport, OpExportDB, OpImportDB:
 			if str, ok := msg.Result.(string); ok {
 				m.Output = str
 			} else if num, ok := msg.Result.(int); ok {
@@ -668,11 +690,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pushState(m.CurrentState)
 
 					switch m.SelectedOp {
-					case OpSet, OpGet, OpHSet, OpHGet, OpDelete, OpRPush, OpSAdd, OpZAdd:
+					case OpSet, OpGet, OpHSet, OpHGet, OpDelete, OpRPush, OpSAdd, OpZAdd, OpExport:
 						m.Input.Input.Focus()
 						m.Input.Input.SetValue("") // Clear previous input
 						m.CurrentState = StateInputKey
 						m.Input.Type = InputKey
+					case OpImport, OpExportDB, OpImportDB:
+						m.Input.Input.Focus()
+						m.Input.Input.SetValue("") // Clear previous input
+						m.CurrentState = StateInputFilePath
+						m.Input.Type = InputFilePath
 					case OpExplore:
 						m.Input.Input.Focus()
 						m.Input.Input.SetValue("*") // Default search is everything
@@ -697,7 +724,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.MenuList = updatedModel
 		return m, cmd
 
-	case StateInputKey, StateInputField, StateInputValue:
+	case StateInputKey, StateInputField, StateInputValue, StateInputFilePath:
 		inputModel, cmd := m.Input.Update(msg)
 		m.Input = inputModel
 		return m, cmd
@@ -720,7 +747,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// 2. Handle the "Creation Flow" (Hard Reset)
-				if previousState == StateInputKey || previousState == StateInputField {
+				if previousState == StateInputKey || previousState == StateInputField || previousState == StateInputFilePath {
 					m.StateNavigationHistory = []AppState{} // Clear history
 					m.CurrentState = StateMenu              // Go to Menu
 					return m, nil
@@ -866,7 +893,7 @@ func (m Model) View() string {
 	switch m.CurrentState {
 	case StateMenu:
 		return m.MenuList.View()
-	case StateInputKey, StateInputField, StateInputValue:
+	case StateInputKey, StateInputField, StateInputValue, StateInputFilePath:
 		return m.Input.View()
 	case StateOutput:
 		helpTextStr := "esc: return • e: edit • c: copy • x: ttl"

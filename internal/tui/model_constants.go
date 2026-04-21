@@ -19,6 +19,7 @@ const (
 	StateLoading
 	StateConfirmation
 	StateInfo
+	StateInputFilePath
 )
 
 type Op int
@@ -52,6 +53,10 @@ const (
 	OpExpirySet
 	OpInfo
 	OpQuit
+	OpExport
+	OpImport
+	OpExportDB
+	OpImportDB
 )
 
 func (o Op) String() string {
@@ -72,8 +77,18 @@ func (o Op) String() string {
 		return "SADD"
 	case OpZAdd:
 		return "ZADD"
-	case OpDelete, OpDel, OpHDel, OpLRem, OpSRem, OpZRem:
+	case OpDelete:
 		return "DELETE"
+	case OpDel:
+		return "DEL"
+	case OpHDel:
+		return "HDEL"
+	case OpLRem:
+		return "LREM"
+	case OpSRem:
+		return "SREM"
+	case OpZRem:
+		return "ZREM"
 	case OpExplore, OpExploreList, OpExploreSet, OpExploreZSet:
 		return "EXPLORE"
 	case OpCheckType:
@@ -84,6 +99,14 @@ func (o Op) String() string {
 		return "EXPIRE"
 	case OpInfo:
 		return "INFO"
+	case OpExport:
+		return "EXPORT"
+	case OpImport:
+		return "IMPORT"
+	case OpExportDB:
+		return "EXPORT_DB"
+	case OpImportDB:
+		return "IMPORT_DB"
 	}
 	return "UNKNOWN"
 }
@@ -118,6 +141,14 @@ func ParseOp(s string) Op {
 		return OpExpirySet
 	case "INFO":
 		return OpInfo
+	case "EXPORT":
+		return OpExport
+	case "IMPORT":
+		return OpImport
+	case "EXPORT_DB":
+		return OpExportDB
+	case "IMPORT_DB":
+		return OpImportDB
 	}
 	return OpNone
 }
