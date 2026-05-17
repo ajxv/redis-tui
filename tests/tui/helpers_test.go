@@ -31,17 +31,6 @@ func newTestModel() tui.Model {
 	}
 }
 
-// newTestModelWithConn wires a model to a mockConn pre-loaded with the given
-// RESP-encoded response string. Use when the test needs the model to dispatch
-// a Redis command and inspect the resulting state.
-func newTestModelWithConn(responses string) tui.Model {
-	conn, reader := newMockConn(responses)
-	m := newTestModel()
-	m.Conn = conn
-	m.Reader = reader
-	return m
-}
-
 // send calls m.Update and returns the updated model and the tea.Cmd.
 func send(m tui.Model, msg interface{}) (tui.Model, tea.Cmd) {
 	updated, cmd := m.Update(msg)
