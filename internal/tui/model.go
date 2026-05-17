@@ -2,9 +2,11 @@ package tui
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/ajxv/redis-tui/internal/redis"
 	"github.com/charmbracelet/bubbles/list"
@@ -33,7 +35,12 @@ type Model struct {
 	Conn                   net.Conn
 	RedisAddress           string
 	Password               string
+	Username               string
 	DB                     int
+	TLSConfig              *tls.Config
+	DialTimeout            time.Duration
+	ReadTimeout            time.Duration
+	ReconnectAttempts      int
 	LastPattern            string
 	Reader                 *bufio.Reader
 	Browser                BrowserModel
@@ -73,7 +80,7 @@ func (m Model) switchToLoadingAndExecute(cmd tea.Cmd) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.Spinner.Tick, connectToRedis(m.RedisAddress, m.Password, m.DB), textinput.Blink)
+	return tea.Batch(m.Spinner.Tick, connectToRedis(m), textinput.Blink)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -99,7 +106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.SelectedOp = OpCheckType
-		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 	case InputCompleteMsg:
 		// Handle the data based on what kind of input it was
@@ -126,7 +133,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey},
 				}
 
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			case OpSet, OpRPush, OpSAdd:
 				m.pushState(m.CurrentState)
@@ -150,7 +157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				m.SelectedOp = OpHKeys
 
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			case OpExport:
 				m.pushState(m.CurrentState)
@@ -167,7 +174,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				m.SelectedOp = OpDelete
 
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			}
 
@@ -195,7 +202,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey, m.ActiveValue},
 				}
 
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			case OpHSet, OpZAdd:
 				// send command
@@ -204,7 +211,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey, m.ActiveField, m.ActiveValue},
 				}
 
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			case OpLSet:
 				cmd := redis.RedisCmd{
@@ -212,7 +219,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey, strconv.Itoa(m.ActiveIndex), m.ActiveValue},
 				}
 
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			case OpRPush, OpSAdd:
 				// send command
@@ -221,7 +228,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey, m.ActiveValue},
 				}
 
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			case OpRename:
 				cmd := redis.RedisCmd{
@@ -229,7 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Args: []string{m.ActiveKey, m.ActiveValue},
 				}
 				m.ActiveKey = m.ActiveValue // keep model in sync
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			case OpExpirySet:
 				if m.ActiveValue == "0" {
@@ -237,13 +244,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Name: "PERSIST",
 						Args: []string{m.ActiveKey},
 					}
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 				}
 				cmd := redis.RedisCmd{
 					Name: "EXPIRE",
 					Args: []string{m.ActiveKey, m.ActiveValue},
 				}
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 			}
 
@@ -276,7 +283,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Args: []string{m.ActiveKey, m.ActiveField},
 			}
 			m.SelectedOp = OpHGet
-			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 		case OpExploreList:
 			// Simple output for list items
@@ -336,7 +343,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ViewPort.Height = msg.Height
 
 	case TickMsg:
-		return m, connectToRedis(m.RedisAddress, m.Password, m.DB)
+		return m, connectToRedis(m)
 
 	case spinner.TickMsg:
 		if m.CurrentState == StateLoading {
@@ -358,31 +365,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case RedisConnectionMsg:
-		if msg.Error != nil {
-			return m, waitForNextConnection()
-		}
-
-		conn := msg.Conn
-		// create and set reader
-		reader := bufio.NewReader(conn)
-		m.Reader = reader
-		m.Conn = conn
-
-		if m.CurrentState == StateLoading {
-			m.CurrentState = m.popState()
-		}
+		return handleRedisConnection(m, msg)
 
 	case LoadMoreKeysMsg:
 		return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, m.Browser.Pattern, m.Browser.Cursor))
 
 	case RefreshMsg:
 		if m.Browser.ViewingFields {
-			// Instead of trusting stale state, let's confidently check the key TYPE again. 
-			// This automatically drops into OpCheckType, which correctly re-routes to 
+			// Instead of trusting stale state, let's confidently check the key TYPE again.
+			// This automatically drops into OpCheckType, which correctly re-routes to
 			// OpHKeys, OpExploreList, etc., OR catches if the key was deleted in the meantime!
 			m.SelectedOp = OpCheckType
 			cmd := redis.RedisCmd{Name: "TYPE", Args: []string{m.ActiveKey}}
-			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 		} else {
 			// Top-level key scan
 			m.SelectedOp = OpExplore
@@ -429,7 +424,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cmd := redis.RedisCmd{
 							Name: "INFO",
 						}
-						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
+						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 					}
 				}
 			case "esc", "q":

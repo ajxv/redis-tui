@@ -11,6 +11,9 @@ An interactive, fast, and lightweight Terminal User Interface (TUI) for explorin
 - **CRUD Operations Wizard:** Use guided forms to `SET`, `HSET`, `RPUSH`, `SADD`, `ZADD`, and more.
 - **TTL Management:** Set, clear, or inspect key expiry. TTL is preserved when editing a value in-place.
 - **Export / Import:** Dump individual keys or entire databases to portable JSON files using Redis `DUMP`/`RESTORE`.
+- **TLS / SSL:** Connect to secured Redis instances (managed Redis services, Redis Cloud, AWS ElastiCache, Upstash) with full mTLS support.
+- **Redis 6+ ACL Auth:** Authenticate with a username and password in addition to the legacy password-only form.
+- **Reconnection with Backoff:** Automatically reconnects after a dropped connection using exponential backoff (200 ms → 25.6 s cap).
 - **Lightweight & Fast:** Custom RESP protocol parser with minimal dependencies.
 - **Cross-Platform:** Works on Linux, macOS, and Windows.
 
@@ -45,26 +48,75 @@ Download the latest binary for your OS from the [Releases page](https://github.c
 redis-tui
 ```
 
-### Command Line Flags
+### Connection via URL (recommended)
+
+The `-url` flag accepts a standard Redis connection string and overrides all individual connection flags:
+
+```bash
+# Plain TCP
+redis-tui -url "redis://localhost:6379/0"
+
+# With password
+redis-tui -url "redis://:mysecret@localhost:6379"
+
+# Redis 6+ ACL username + password
+redis-tui -url "redis://alice:mysecret@localhost:6379/2"
+
+# TLS (rediss:// implies -tls)
+redis-tui -url "rediss://user:pass@my-redis.example.com:6380/0"
+```
+
+### Connection via individual flags
+
+```bash
+redis-tui -host "127.0.0.1:6379" -password "mysecret" -db 0
+```
+
+### All flags
 
 | Flag | Description | Default |
 | :--- | :--- | :--- |
-| `-host` | Redis server address `<host:port>` | `localhost:6379` |
-| `-password` | Redis server password | `$REDIS_PASSWORD` env var, or `""` |
+| `-url` | Redis URL: `redis://[:pass@]host[:port][/db]` or `rediss://…` | — |
+| `-host` | Redis server address `host:port` | `localhost:6379` |
+| `-password` | Redis password | `$REDIS_PASSWORD` env var |
+| `-username` | Redis ACL username (Redis 6+) | — |
 | `-db` | Redis database index | `0` |
+| `-dial-timeout` | TCP connection timeout | `5s` |
+| `-read-timeout` | Per-command read deadline | `10s` |
+| `-tls` | Enable TLS/SSL | `false` |
+| `-tls-skip-verify` | Skip TLS certificate verification *(insecure)* | `false` |
+| `-tls-cert` | Path to client certificate (PEM) | — |
+| `-tls-key` | Path to client private key (PEM) | — |
+| `-tls-ca` | Path to CA certificate (PEM) | — |
 
-**Tip:** Set the `REDIS_PASSWORD` environment variable to avoid exposing your password in the process list:
+**Tip:** Store your password in the environment to keep it out of the process list:
 
 ```bash
-export REDIS_PASSWORD="mysecr3t"
+export REDIS_PASSWORD="mysecret"
 redis-tui -host "127.0.0.1:6379"
 ```
 
-Or pass it directly as a flag:
+### TLS examples
 
 ```bash
-redis-tui -host "127.0.0.1:6379" -password "mysecr3t" -db 0
+# Connect to a TLS-secured Redis, trust the system CA store
+redis-tui -host "my-redis.example.com:6380" -tls
+
+# Skip certificate verification (useful for self-signed certs in dev)
+redis-tui -host "localhost:6380" -tls -tls-skip-verify
+
+# mTLS with a custom CA and client certificate
+redis-tui -host "my-redis.example.com:6380" \
+  -tls \
+  -tls-ca /etc/ssl/redis-ca.pem \
+  -tls-cert /etc/ssl/redis-client.pem \
+  -tls-key /etc/ssl/redis-client-key.pem
+
+# Redis 6+ ACL user via URL (TLS implied by rediss://)
+redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 ```
+
+> **Note:** `-tls-cert` and `-tls-key` must always be provided together.
 
 ## Keybindings
 
@@ -134,7 +186,7 @@ make lint-optional
 ├── cmd/redis-tui/          # Entry point and CLI flags
 ├── internal/
 │   ├── redis/              # RESP protocol parser
-│   └── tui/                # Bubble Tea model, state machine, export/import
+│   └── tui/                # Bubble Tea model, state machine, TLS, URL parser, export/import
 └── tests/
     ├── redis/              # Black-box tests for the RESP parser
     └── tui/                # Black-box integration tests for the state machine

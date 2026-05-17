@@ -77,7 +77,6 @@ type RenameRequestMsg struct {
 
 type RefreshMsg struct{}
 
-
 func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 	var cmd tea.Cmd
 

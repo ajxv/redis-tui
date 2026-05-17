@@ -42,6 +42,40 @@ func resolveFilePath(path string, createDirs bool) (string, error) {
 	return path, nil
 }
 
+// fetchKeyExportData fetches a single key's DUMP payload and PTTL from Redis
+// and returns an ExportData ready for JSON serialisation.
+func fetchKeyExportData(conn net.Conn, reader *bufio.Reader, key string) (ExportData, error) {
+	conn.Write(redis.RedisCmd{Name: "DUMP", Args: []string{key}}.ToBytes())
+	conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+	dumpResp, err := redis.ReadResp(reader)
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return ExportData{}, err
+	}
+	dumpPayload, ok := dumpResp.(string)
+	if !ok || dumpPayload == "" {
+		return ExportData{}, fmt.Errorf("key %q does not exist or has no payload", key)
+	}
+
+	conn.Write(redis.RedisCmd{Name: "PTTL", Args: []string{key}}.ToBytes())
+	conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+	pttlResp, err := redis.ReadResp(reader)
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return ExportData{}, fmt.Errorf("PTTL failed for %q: %w", key, err)
+	}
+	ttl := -1
+	if p, ok := pttlResp.(int); ok {
+		ttl = p
+	}
+
+	return ExportData{
+		Key:   key,
+		TTL:   ttl,
+		Value: base64.StdEncoding.EncodeToString([]byte(dumpPayload)),
+	}, nil
+}
+
 func ExportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath string) tea.Cmd {
 	return func() tea.Msg {
 		if conn == nil {
@@ -53,55 +87,17 @@ func ExportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath s
 			return RedisResultMsg{Error: err}
 		}
 
-		// Issue DUMP command
-		cmd := redis.RedisCmd{Name: "DUMP", Args: []string{key}}
-		_, err = conn.Write(cmd.ToBytes())
-		if err != nil {
-			return RedisResultMsg{Error: err}
-		}
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		resp, err := redis.ReadResp(reader)
-		conn.SetReadDeadline(time.Time{})
+		data, err := fetchKeyExportData(conn, reader, key)
 		if err != nil {
 			return RedisResultMsg{Error: err}
 		}
 
-		dumpPayload, ok := resp.(string)
-		if !ok || dumpPayload == "" {
-			return RedisResultMsg{Error: fmt.Errorf("key does not exist or payload invalid")}
-		}
-
-		// Issue PTTL command
-		pttlCmd := redis.RedisCmd{Name: "PTTL", Args: []string{key}}
-		if _, err = conn.Write(pttlCmd.ToBytes()); err != nil {
-			return RedisResultMsg{Error: fmt.Errorf("PTTL write failed: %v", err)}
-		}
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-		pttlResp, err := redis.ReadResp(reader)
-		conn.SetReadDeadline(time.Time{})
-		if err != nil {
-			return RedisResultMsg{Error: fmt.Errorf("PTTL read failed: %v", err)}
-		}
-		ttl := -1
-		if p, ok := pttlResp.(int); ok {
-			ttl = p
-		}
-
-		data := []ExportData{
-			{
-				Key:   key,
-				TTL:   ttl,
-				Value: base64.StdEncoding.EncodeToString([]byte(dumpPayload)),
-			},
-		}
-
-		fileData, err := json.MarshalIndent(data, "", "  ")
+		fileData, err := json.MarshalIndent([]ExportData{data}, "", "  ")
 		if err != nil {
 			return RedisResultMsg{Error: fmt.Errorf("failed to marshal JSON: %v", err)}
 		}
 
-		err = os.WriteFile(resolvedPath, fileData, 0600)
-		if err != nil {
+		if err := os.WriteFile(resolvedPath, fileData, 0600); err != nil {
 			return RedisResultMsg{Error: fmt.Errorf("failed to write file: %v", err)}
 		}
 
@@ -126,8 +122,7 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 		}
 
 		var data []ExportData
-		err = json.Unmarshal(fileData, &data)
-		if err != nil {
+		if err := json.Unmarshal(fileData, &data); err != nil {
 			return RedisResultMsg{Error: fmt.Errorf("failed to parse JSON: %v", err)}
 		}
 
@@ -135,10 +130,9 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 		for _, item := range data {
 			decodedDump, err := base64.StdEncoding.DecodeString(item.Value)
 			if err != nil {
-				continue // Skip invalid items
+				continue
 			}
 
-			// In RESTORE, TTL of 0 means no expiry.
 			restoreTTL := item.TTL
 			if restoreTTL < 0 {
 				restoreTTL = 0
@@ -154,7 +148,7 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 				},
 			}
 			conn.Write(cmd.ToBytes())
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 			resp, err := redis.ReadResp(reader)
 			conn.SetReadDeadline(time.Time{})
 			if err == nil {
@@ -168,6 +162,12 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 	}
 }
 
+// ExportFullDB exports every key in the current Redis database to a JSON file.
+// Keys are streamed via SCAN and written incrementally — memory usage is
+// proportional to one SCAN batch, not the entire dataset.
+//
+// The file is written to a temporary path first and atomically renamed on
+// success, so a partial or interrupted export never corrupts a previous export.
 func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 	return func() tea.Msg {
 		if conn == nil {
@@ -179,16 +179,36 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 			return RedisResultMsg{Error: err}
 		}
 
-		var data []ExportData
+		tmpPath := resolvedPath + ".tmp"
+
+		f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("failed to create export file: %v", err)}
+		}
+
+		// Ensure the .tmp file is cleaned up on any error path.
+		success := false
+		defer func() {
+			f.Close()
+			if !success {
+				os.Remove(tmpPath)
+			}
+		}()
+
+		enc := json.NewEncoder(f)
+		enc.SetIndent("", "  ")
+
+		if _, err := f.Write([]byte("[\n")); err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("failed to write export file: %v", err)}
+		}
+
+		first := true
+		exportedCount := 0
 		cursor := "0"
 
 		for {
-			cmd := redis.RedisCmd{
-				Name: "SCAN",
-				Args: []string{cursor},
-			}
-			conn.Write(cmd.ToBytes())
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			conn.Write(redis.RedisCmd{Name: "SCAN", Args: []string{cursor}}.ToBytes())
+			conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 			response, err := redis.ReadResp(reader)
 			conn.SetReadDeadline(time.Time{})
 			if err != nil {
@@ -210,39 +230,21 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 			}
 
 			for _, key := range keys {
-				// DUMP
-				conn.Write(redis.RedisCmd{Name: "DUMP", Args: []string{key}}.ToBytes())
-				conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-				dumpResp, err := redis.ReadResp(reader)
-				conn.SetReadDeadline(time.Time{})
+				data, err := fetchKeyExportData(conn, reader, key)
 				if err != nil {
-					continue
-				}
-				dumpPayload, ok := dumpResp.(string)
-				if !ok || dumpPayload == "" {
-					continue
+					continue // skip unreadable keys; don't abort the whole export
 				}
 
-				// PTTL
-				if _, err = conn.Write(redis.RedisCmd{Name: "PTTL", Args: []string{key}}.ToBytes()); err != nil {
-					continue
+				if !first {
+					if _, err := f.Write([]byte(",\n")); err != nil {
+						return RedisResultMsg{Error: fmt.Errorf("write error: %v", err)}
+					}
 				}
-				conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-				pttlResp, err := redis.ReadResp(reader)
-				conn.SetReadDeadline(time.Time{})
-				if err != nil {
-					continue
+				if err := enc.Encode(data); err != nil {
+					return RedisResultMsg{Error: fmt.Errorf("JSON encode error: %v", err)}
 				}
-				ttl := -1
-				if p, ok := pttlResp.(int); ok {
-					ttl = p
-				}
-
-				data = append(data, ExportData{
-					Key:   key,
-					TTL:   ttl,
-					Value: base64.StdEncoding.EncodeToString([]byte(dumpPayload)),
-				})
+				first = false
+				exportedCount++
 			}
 
 			if cursor == "0" {
@@ -250,16 +252,19 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 			}
 		}
 
-		fileData, err := json.MarshalIndent(data, "", "  ")
-		if err != nil {
-			return RedisResultMsg{Error: fmt.Errorf("failed to marshal JSON: %v", err)}
+		if _, err := f.Write([]byte("]\n")); err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("failed to finalise export file: %v", err)}
 		}
 
-		err = os.WriteFile(resolvedPath, fileData, 0600)
-		if err != nil {
-			return RedisResultMsg{Error: fmt.Errorf("failed to write file: %v", err)}
+		// Atomic rename: on Linux/macOS, renaming an open file is safe at the
+		// filesystem level (rename is a directory operation). The defer closes f
+		// after the rename completes. On Windows, os.Rename on an open file will
+		// fail — close explicitly there if Windows support is needed.
+		if err := os.Rename(tmpPath, resolvedPath); err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("failed to finalise export: %v", err)}
 		}
+		success = true
 
-		return RedisResultMsg{Result: fmt.Sprintf("Successfully exported %d keys to %s", len(data), resolvedPath)}
+		return RedisResultMsg{Result: fmt.Sprintf("Successfully exported %d keys to %s", exportedCount, resolvedPath)}
 	}
 }

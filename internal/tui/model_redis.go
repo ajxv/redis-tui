@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strconv"
@@ -12,70 +13,109 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// A command that waits for 2 seconds, then returns the TickMsg
-func waitForNextConnection() tea.Cmd {
-	return func() tea.Msg {
-		time.Sleep(2 * time.Second)
+const defaultDialTimeout = 5 * time.Second
+const defaultReadTimeout = 10 * time.Second
 
+// BackoffDuration returns an exponentially increasing wait time capped at 30s.
+// Attempt is clamped to 7 to prevent integer overflow (1<<7 * 200ms = 25.6s).
+func BackoffDuration(attempt int) time.Duration {
+	const maxWait = 30 * time.Second
+	if attempt > 7 {
+		attempt = 7
+	}
+	d := time.Duration(1<<attempt) * 200 * time.Millisecond
+	if d > maxWait {
+		d = maxWait
+	}
+	return d
+}
+
+// waitForNextConnection waits the backoff duration then signals a reconnect.
+func waitForNextConnection(attempt int) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(BackoffDuration(attempt))
 		return TickMsg{}
 	}
 }
 
-func connectToRedis(address string, password string, db int) tea.Cmd {
+// connectToRedis dials Redis using the connection settings stored in m,
+// performs TLS wrapping when configured, authenticates, and selects the DB.
+func connectToRedis(m Model) tea.Cmd {
 	return func() tea.Msg {
-		// dial the address with a timeout
-		conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+		dialTimeout := m.DialTimeout
+		if dialTimeout == 0 {
+			dialTimeout = defaultDialTimeout
+		}
+
+		// 1. Dial raw TCP
+		rawConn, err := net.DialTimeout("tcp", m.RedisAddress, dialTimeout)
 		if err != nil {
-			return RedisConnectionMsg{
-				Error: err,
+			return RedisConnectionMsg{Error: err}
+		}
+
+		// 2. Wrap with TLS when configured
+		var conn net.Conn = rawConn
+		if m.TLSConfig != nil {
+			tlsConn := tls.Client(rawConn, m.TLSConfig)
+			if err := tlsConn.Handshake(); err != nil {
+				rawConn.Close()
+				return RedisConnectionMsg{Error: fmt.Errorf("TLS handshake failed: %w", err)}
 			}
+			conn = tlsConn
 		}
 
 		reader := bufio.NewReader(conn)
 
-		if password != "" {
-			cmd := redis.RedisCmd{
-				Name: "AUTH",
-				Args: []string{password},
-			}
-
-			_, err = conn.Write(cmd.ToBytes())
-			if err != nil {
-				return RedisConnectionMsg{
-					Error: err,
-				}
-			}
-			_, err = redis.ReadResp(reader)
-			if err != nil {
-				return RedisConnectionMsg{
-					Error: err,
-				}
-			}
+		// 3. AUTH — ACL format (username + password) or legacy (password only)
+		if err := sendAuth(conn, reader, m.Username, m.Password); err != nil {
+			conn.Close()
+			return RedisConnectionMsg{Error: err}
 		}
 
-		// select db
+		// 4. SELECT database
 		cmd := redis.RedisCmd{
 			Name: "SELECT",
-			Args: []string{strconv.Itoa(db)},
+			Args: []string{strconv.Itoa(m.DB)},
 		}
-
 		_, err = conn.Write(cmd.ToBytes())
 		if err != nil {
-			return RedisConnectionMsg{
-				Error: err,
-			}
+			conn.Close()
+			return RedisConnectionMsg{Error: err}
 		}
 		_, err = redis.ReadResp(reader)
 		if err != nil {
-			return RedisConnectionMsg{
-				Error: err,
-			}
+			conn.Close()
+			return RedisConnectionMsg{Error: err}
 		}
 
-		return RedisConnectionMsg{
-			Conn: conn,
-		}
+		return RedisConnectionMsg{Conn: conn}
 	}
+}
+
+// sendAuth sends the appropriate AUTH command based on whether a username is
+// provided. Sends nothing when both username and password are empty.
+func sendAuth(conn net.Conn, reader *bufio.Reader, username, password string) error {
+	var cmd redis.RedisCmd
+	if username != "" && password != "" {
+		cmd = redis.RedisCmd{Name: "AUTH", Args: []string{username, password}}
+	} else if password != "" {
+		cmd = redis.RedisCmd{Name: "AUTH", Args: []string{password}}
+	} else {
+		return nil
+	}
+
+	if _, err := conn.Write(cmd.ToBytes()); err != nil {
+		return fmt.Errorf("AUTH write failed: %w", err)
+	}
+	resp, err := redis.ReadResp(reader)
+	if err != nil {
+		return fmt.Errorf("AUTH read failed: %w", err)
+	}
+	// ReadResp returns plain strings for both +OK and -ERR... responses.
+	if str, ok := resp.(string); ok && str != "OK" {
+		return fmt.Errorf("AUTH rejected: %s", str)
+	}
+	return nil
 }
 
 func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor string) tea.Cmd {
@@ -119,7 +159,7 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 						conn.Write(cmd.ToBytes())
 					}
 
-					// Read piplined responses
+					// Read pipelined responses
 					for _, k := range rawKeys {
 						desc := "key"
 						typeResp, err := redis.ReadResp(reader)
@@ -140,42 +180,38 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 	}
 }
 
-func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd) tea.Cmd {
+func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd, readTimeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		// SAFETY CHECK: If there is no connection, return an error immediately
 		if conn == nil {
 			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
 		}
 
-		// 1. Send the command to Redis (conn.Write)
-		// 2. Read the response (redis.ReadResp)
-		// 3. Return a RedisResultMsg
+		if readTimeout == 0 {
+			readTimeout = defaultReadTimeout
+		}
 
 		_, err := conn.Write(cmd.ToBytes())
 		if err != nil {
-			return RedisResultMsg{
-				Error: err,
-			}
+			return RedisResultMsg{Error: err}
 		}
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		response, err := redis.ReadResp(reader)
 		conn.SetReadDeadline(time.Time{})
 		if err != nil {
-			return RedisResultMsg{
-				Error: err,
-			}
+			return RedisResultMsg{Error: err}
 		}
 
-		return RedisResultMsg{
-			Result: response,
-		}
+		return RedisResultMsg{Result: response}
 	}
 }
 
-func fetchTTL(conn net.Conn, reader *bufio.Reader, key string) tea.Cmd {
+func fetchTTL(conn net.Conn, reader *bufio.Reader, key string, readTimeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		if conn == nil {
 			return RedisTTLResultMsg{TTL: -2}
+		}
+		if readTimeout == 0 {
+			readTimeout = defaultReadTimeout
 		}
 		cmd := redis.RedisCmd{
 			Name: "TTL",
@@ -185,7 +221,7 @@ func fetchTTL(conn net.Conn, reader *bufio.Reader, key string) tea.Cmd {
 		if err != nil {
 			return RedisTTLResultMsg{TTL: -2}
 		}
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		response, err := redis.ReadResp(reader)
 		conn.SetReadDeadline(time.Time{})
 		if err != nil {

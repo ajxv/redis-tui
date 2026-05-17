@@ -22,7 +22,7 @@ func TestInput_Key_DispatchingOps(t *testing.T) {
 		wantState tui.AppState
 		wantCmd   bool // true = expect a tea.Cmd (Redis dispatch or state transition)
 	}{
-		{tui.OpGet, tui.StateLoading, true},    // GET dispatches immediately
+		{tui.OpGet, tui.StateLoading, true},     // GET dispatches immediately
 		{tui.OpSet, tui.StateInputValue, false}, // asks for value next
 		{tui.OpRPush, tui.StateInputValue, false},
 		{tui.OpSAdd, tui.StateInputValue, false},
@@ -650,10 +650,10 @@ func TestSelectField_List_ShowsDirectOutput(t *testing.T) {
 // context (key vs field, and the current explore mode).
 func TestDeleteRequest_OpMapping(t *testing.T) {
 	cases := []struct {
-		name       string
-		currentOp  tui.Op
-		field      string // empty = key delete
-		wantOp     tui.Op
+		name      string
+		currentOp tui.Op
+		field     string // empty = key delete
+		wantOp    tui.Op
 	}{
 		{"key", tui.OpExplore, "", tui.OpDel},
 		{"hash field", tui.OpHKeys, "f", tui.OpHDel},

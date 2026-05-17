@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +24,7 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 				m.pushState(m.CurrentState)
 			}
 			m.CurrentState = StateLoading
-			return m, connectToRedis(m.RedisAddress, m.Password, m.DB)
+			return m, connectToRedis(m)
 		}
 
 		m.Output = msg.Error.Error()
@@ -37,7 +39,7 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			m.CurrentState = StateOutput
 			if m.SelectedOp != OpInfo {
 				m.ActiveTTL = "fetching..."
-				return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey)
+				return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey, m.ReadTimeout)
 			}
 		}
 
@@ -125,19 +127,19 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			switch str {
 			case "string":
 				m.SelectedOp = OpGet
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "GET", Args: []string{m.ActiveKey}}))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "GET", Args: []string{m.ActiveKey}}, m.ReadTimeout))
 			case "hash":
 				m.SelectedOp = OpHKeys
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "HKEYS", Args: []string{m.ActiveKey}}))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "HKEYS", Args: []string{m.ActiveKey}}, m.ReadTimeout))
 			case "list":
 				m.SelectedOp = OpLRange
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", "-1"}}))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", "-1"}}, m.ReadTimeout))
 			case "set":
 				m.SelectedOp = OpSMembers
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SMEMBERS", Args: []string{m.ActiveKey}}))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SMEMBERS", Args: []string{m.ActiveKey}}, m.ReadTimeout))
 			case "zset":
 				m.SelectedOp = OpZRange
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", "-1", "WITHSCORES"}}))
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", "-1", "WITHSCORES"}}, m.ReadTimeout))
 			case "none":
 				m.Output = "Key does not exist or has expired."
 				m.CurrentState = StateOutput
@@ -156,7 +158,7 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		m.SelectedOp = OpSet
 		m.CurrentState = StateOutput
 		m.ActiveTTL = "fetching..."
-		return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey)
+		return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey, m.ReadTimeout)
 
 	case OpSet, OpLSet, OpRename, OpExpirySet, OpExport, OpImport, OpExportDB, OpImportDB:
 		if str, ok := msg.Result.(string); ok {
@@ -172,12 +174,12 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			ttl := m.PreservedTTL
 			m.PreservedTTL = 0
 			m.SelectedOp = OpExpireAfterSet
-			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "EXPIRE", Args: []string{m.ActiveKey, strconv.Itoa(ttl)}}))
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "EXPIRE", Args: []string{m.ActiveKey, strconv.Itoa(ttl)}}, m.ReadTimeout))
 		}
 
 		if m.SelectedOp == OpExpirySet || m.SelectedOp == OpRename {
 			m.ActiveTTL = "fetching..."
-			return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey)
+			return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey, m.ReadTimeout)
 		}
 
 	case OpDel:
@@ -194,22 +196,22 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 	case OpHDel:
 		m.Output = "Deleted Hash Key: " + m.ActiveKey
 		m.SelectedOp = OpHKeys
-		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "HKEYS", Args: []string{m.ActiveKey}}))
+		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "HKEYS", Args: []string{m.ActiveKey}}, m.ReadTimeout))
 
 	case OpLRem:
 		m.Output = "Removed element from list: " + m.ActiveKey
 		m.SelectedOp = OpLRange
-		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", "-1"}}))
+		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", "-1"}}, m.ReadTimeout))
 
 	case OpSRem:
 		m.Output = "Removed element from set: " + m.ActiveKey
 		m.SelectedOp = OpSMembers
-		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SMEMBERS", Args: []string{m.ActiveKey}}))
+		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SMEMBERS", Args: []string{m.ActiveKey}}, m.ReadTimeout))
 
 	case OpZRem:
 		m.Output = "Removed element from sorted set: " + m.ActiveKey
 		m.SelectedOp = OpZRange
-		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", "-1", "WITHSCORES"}}))
+		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", "-1", "WITHSCORES"}}, m.ReadTimeout))
 
 	case OpDelete, OpHSet, OpRPush, OpSAdd, OpZAdd:
 		if res, ok := msg.Result.(int); ok {
@@ -280,7 +282,7 @@ func handleStateOutputKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		err := clipboard.WriteAll(m.Output)
 		if err != nil {
-			m.CopyStatus = "Clipboard unavailable (xclip/xsel missing?)"
+			m.CopyStatus = clipboardErrorHint()
 		} else {
 			m.CopyStatus = "Copied to clipboard!"
 		}
@@ -318,18 +320,52 @@ func handleStateConfirmationKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd)
 			return m, tea.Quit
 		case OpDel:
 			m.CurrentState = StateLoading
-			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey}})
+			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey}}, m.ReadTimeout)
 		case OpHDel:
 			m.CurrentState = StateLoading
-			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, m.ActiveField}})
+			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, m.ActiveField}}, m.ReadTimeout)
 		case OpLRem:
 			m.CurrentState = StateLoading
-			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, "1", m.ActiveField}})
+			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, "1", m.ActiveField}}, m.ReadTimeout)
 		case OpSRem, OpZRem:
 			m.CurrentState = StateLoading
-			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, m.ActiveField}})
+			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, m.ActiveField}}, m.ReadTimeout)
 		}
 	}
 
+	return m, nil
+}
+
+// clipboardErrorHint returns a platform-specific message when clipboard access fails.
+func clipboardErrorHint() string {
+	switch runtime.GOOS {
+	case "linux":
+		return "Clipboard unavailable. Install xclip, xsel, or wl-clipboard (Wayland)."
+	case "darwin":
+		return "Clipboard unavailable. pbcopy should be built-in — check your PATH."
+	case "windows":
+		return "Clipboard unavailable. Windows clipboard API should work; check antivirus."
+	default:
+		return "Clipboard unavailable. Check system clipboard tools."
+	}
+}
+
+// handleRedisConnection processes a RedisConnectionMsg, resetting reconnect
+// state on success and scheduling a backoff retry on failure.
+func handleRedisConnection(m Model, msg RedisConnectionMsg) (tea.Model, tea.Cmd) {
+	if msg.Error != nil {
+		m.ReconnectAttempts++
+		return m, waitForNextConnection(m.ReconnectAttempts)
+	}
+
+	conn := msg.Conn
+	reader := bufio.NewReader(conn)
+	m.Reader = reader
+	m.Conn = conn
+	m.ReconnectAttempts = 0
+
+	if m.CurrentState == StateLoading {
+		m.CurrentState = m.popState()
+	}
 	return m, nil
 }

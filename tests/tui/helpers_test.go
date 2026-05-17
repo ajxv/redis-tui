@@ -4,6 +4,7 @@ package tui_test
 
 import (
 	"bufio"
+	"bytes"
 	"net"
 	"strings"
 	"time"
@@ -32,7 +33,7 @@ func newTestModel() tui.Model {
 }
 
 // send calls m.Update and returns the updated model and the tea.Cmd.
-func send(m tui.Model, msg interface{}) (tui.Model, tea.Cmd) {
+func send(m tui.Model, msg any) (tui.Model, tea.Cmd) {
 	updated, cmd := m.Update(msg)
 	return updated.(tui.Model), cmd
 }
@@ -43,7 +44,8 @@ func send(m tui.Model, msg interface{}) (tui.Model, tea.Cmd) {
 // -------------------------------------------------------------------
 
 type mockConn struct {
-	reader *strings.Reader
+	reader      *strings.Reader
+	writtenData bytes.Buffer // captures Write calls for assertion in tests
 }
 
 func newMockConn(data string) (*mockConn, *bufio.Reader) {
@@ -52,7 +54,7 @@ func newMockConn(data string) (*mockConn, *bufio.Reader) {
 }
 
 func (c *mockConn) Read(b []byte) (int, error)         { return c.reader.Read(b) }
-func (c *mockConn) Write(b []byte) (int, error)        { return len(b), nil }
+func (c *mockConn) Write(b []byte) (int, error)        { return c.writtenData.Write(b) }
 func (c *mockConn) Close() error                       { return nil }
 func (c *mockConn) LocalAddr() net.Addr                { return nil }
 func (c *mockConn) RemoteAddr() net.Addr               { return nil }
