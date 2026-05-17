@@ -1,14 +1,17 @@
 # Redis TUI
 
-An interactive, fast, and lightweight Terminal User Interface (TUI) for exploring and managing your Redis databases. Built with Go and the [Bubble Tea](https://github.com/charmbracelet/bubbletea) framework, it replaces repetitive CLI commands with an intuitive, keyboard-driven UI.
+[![CI](https://github.com/ajxv/redis-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/ajxv/redis-tui/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ajxv/redis-tui)](https://goreportcard.com/report/github.com/ajxv/redis-tui)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/ajxv/redis-tui)](https://github.com/ajxv/redis-tui/releases/latest)
 
-*(Insert Demo GIF screenshot here)*
+An interactive, fast, and lightweight Terminal User Interface (TUI) for exploring and managing your Redis databases. Built with Go and the [Bubble Tea](https://github.com/charmbracelet/bubbletea) framework, it replaces repetitive CLI commands with an intuitive, keyboard-driven UI.
 
 ## Features
 
 - **Interactive Database Explorer:** Browse through thousands of keys with SCAN-based pagination.
 - **Context-Aware Drilling:** Navigate into Hash fields, Lists, Sets, and Sorted Sets with full CRUD support.
-- **CRUD Operations Wizard:** Use guided forms to `SET`, `HSET`, `RPUSH`, `SADD`, `ZADD`, and more.
+- **CRUD Operations Wizard:** Use guided forms to `SET`, `HSET`, `RPUSH`, `LPUSH`, `SADD`, `ZADD`, and more.
 - **TTL Management:** Set, clear, or inspect key expiry. TTL is preserved when editing a value in-place.
 - **Export / Import:** Dump individual keys or entire databases to portable JSON files using Redis `DUMP`/`RESTORE`.
 - **TLS / SSL:** Connect to secured Redis instances (managed Redis services, Redis Cloud, AWS ElastiCache, Upstash) with full mTLS support.
@@ -16,6 +19,17 @@ An interactive, fast, and lightweight Terminal User Interface (TUI) for explorin
 - **Reconnection with Backoff:** Automatically reconnects after a dropped connection using exponential backoff (200 ms → 25.6 s cap).
 - **Lightweight & Fast:** Custom RESP protocol parser with minimal dependencies.
 - **Cross-Platform:** Works on Linux, macOS, and Windows.
+
+## Why redis-tui?
+
+| | redis-tui | redis-cli | RedisInsight |
+|:---|:---:|:---:|:---:|
+| Terminal-native | ✓ | ✓ | ✗ |
+| No install / single binary | ✓ | ✗ | ✗ |
+| Full CRUD for all data types | ✓ | ✓ | ✓ |
+| Export / Import (JSON) | ✓ | ✗ | ✓ |
+| TLS / mTLS | ✓ | ✓ | ✓ |
+| Keyboard-driven navigation | ✓ | ✗ | ✗ |
 
 ## Prerequisites
 
@@ -156,6 +170,13 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 | `d` | Delete field or member (with confirmation) |
 | `Ctrl+R` / `F5` | Refresh |
 
+## Known Limitations (Beta)
+
+- **Large collections:** Lists, Sets, and Sorted Sets load in pages of 100 items — press `n` to load the next page.
+- **Offset-based list/zset paging:** If items are added or removed mid-browse, reopen the key (`Ctrl+R`) for a consistent view.
+- **Redis Streams:** `XADD` / `XREAD` are not yet supported.
+- **No in-browser search:** Use the pattern input (e.g. `user:*`) when entering Explore mode to narrow the key list.
+
 ## Development
 
 ```bash
@@ -187,15 +208,13 @@ make lint-optional
 ├── internal/
 │   ├── redis/              # RESP protocol parser
 │   └── tui/                # Bubble Tea model, state machine, TLS, URL parser, export/import
+├── docs/                   # Release process and maintainer guides
 └── tests/
     ├── redis/              # Black-box tests for the RESP parser
     └── tui/                # Black-box integration tests for the state machine
 ```
 
-> **Note on test placement:** Go's testing convention co-locates unit tests with source (`_test.go` files).
-> Tests that require access to unexported implementation details (e.g., `exportSingleKey`) remain in
-> `internal/tui/` under `package tui`. Tests exercising only the public API live in `tests/` under
-> `package redis_test` / `package tui_test`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, test conventions, and the PR workflow.
 
 ## License
 

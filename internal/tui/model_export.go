@@ -45,7 +45,9 @@ func resolveFilePath(path string, createDirs bool) (string, error) {
 // fetchKeyExportData fetches a single key's DUMP payload and PTTL from Redis
 // and returns an ExportData ready for JSON serialisation.
 func fetchKeyExportData(conn net.Conn, reader *bufio.Reader, key string) (ExportData, error) {
-	conn.Write(redis.RedisCmd{Name: "DUMP", Args: []string{key}}.ToBytes())
+	if _, err := conn.Write(redis.RedisCmd{Name: "DUMP", Args: []string{key}}.ToBytes()); err != nil {
+		return ExportData{}, fmt.Errorf("DUMP write failed for %q: %w", key, err)
+	}
 	conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 	dumpResp, err := redis.ReadResp(reader)
 	conn.SetReadDeadline(time.Time{})
@@ -57,7 +59,9 @@ func fetchKeyExportData(conn net.Conn, reader *bufio.Reader, key string) (Export
 		return ExportData{}, fmt.Errorf("key %q does not exist or has no payload", key)
 	}
 
-	conn.Write(redis.RedisCmd{Name: "PTTL", Args: []string{key}}.ToBytes())
+	if _, err := conn.Write(redis.RedisCmd{Name: "PTTL", Args: []string{key}}.ToBytes()); err != nil {
+		return ExportData{}, fmt.Errorf("PTTL write failed for %q: %w", key, err)
+	}
 	conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 	pttlResp, err := redis.ReadResp(reader)
 	conn.SetReadDeadline(time.Time{})
@@ -158,7 +162,7 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 			}
 		}
 
-		return RedisResultMsg{Result: fmt.Sprintf("Successfully imported %d keys from %s", importedCount, filePath)}
+		return RedisResultMsg{Result: fmt.Sprintf("Successfully imported %d keys from %s", importedCount, resolvedPath)}
 	}
 }
 
@@ -187,10 +191,11 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 		}
 
 		// Ensure the .tmp file is cleaned up on any error path.
+		// f.Close() is safe to call multiple times (no-op after first call).
 		success := false
 		defer func() {
-			f.Close()
 			if !success {
+				f.Close()
 				os.Remove(tmpPath)
 			}
 		}()
@@ -207,7 +212,9 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 		cursor := "0"
 
 		for {
-			conn.Write(redis.RedisCmd{Name: "SCAN", Args: []string{cursor}}.ToBytes())
+			if _, err := conn.Write(redis.RedisCmd{Name: "SCAN", Args: []string{cursor}}.ToBytes()); err != nil {
+				return RedisResultMsg{Error: err}
+			}
 			conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 			response, err := redis.ReadResp(reader)
 			conn.SetReadDeadline(time.Time{})
@@ -256,11 +263,11 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 			return RedisResultMsg{Error: fmt.Errorf("failed to finalise export file: %v", err)}
 		}
 
-		// Atomic rename: on Linux/macOS, renaming an open file is safe at the
-		// filesystem level (rename is a directory operation). The defer closes f
-		// after the rename completes. On Windows, os.Rename on an open file will
-		// fail — close explicitly there if Windows support is needed.
+		// Close before rename so Windows can move the file (open handles block
+		// os.Rename on Windows). On Linux/macOS this is a no-op in terms of safety.
+		f.Close()
 		if err := os.Rename(tmpPath, resolvedPath); err != nil {
+			os.Remove(tmpPath)
 			return RedisResultMsg{Error: fmt.Errorf("failed to finalise export: %v", err)}
 		}
 		success = true

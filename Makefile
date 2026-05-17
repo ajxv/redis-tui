@@ -2,9 +2,11 @@
 
 BINARY_NAME=redis-tui
 MAIN_PATH=./cmd/redis-tui
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS  = -s -w -X main.version=$(VERSION)
 
 build:
-	go build -o $(BINARY_NAME) $(MAIN_PATH)
+	go build -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) $(MAIN_PATH)
 
 run: build
 	./$(BINARY_NAME)

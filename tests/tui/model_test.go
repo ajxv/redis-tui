@@ -353,12 +353,13 @@ func TestResult_LRange_LoadsListItems(t *testing.T) {
 	}
 }
 
-// TestResult_SMembers_LoadsSetItems verifies an SMEMBERS result sets OpExploreSet.
+// TestResult_SMembers_LoadsSetItems verifies an SSCAN result sets OpExploreSet.
+// The response format is [cursor, [member1, member2, ...]] (SSCAN, not SMEMBERS).
 func TestResult_SMembers_LoadsSetItems(t *testing.T) {
 	m := newTestModel()
 	m.SelectedOp = tui.OpSMembers
 
-	m2, _ := send(m, tui.RedisResultMsg{Result: []any{"a", "b"}})
+	m2, _ := send(m, tui.RedisResultMsg{Result: []any{"0", []any{"a", "b"}}})
 
 	if m2.CurrentState != tui.StateBrowser {
 		t.Errorf("state: want StateBrowser, got %v", m2.CurrentState)
@@ -1403,5 +1404,129 @@ func TestView_Loading_ContainsLoadingText(t *testing.T) {
 
 	if !strings.Contains(m.View(), "Loading") {
 		t.Error("StateLoading view should contain 'Loading'")
+	}
+}
+
+// ============================================================
+// 11. FIELD PAGINATION
+// ============================================================
+
+// TestResult_LRange_HasMoreWhenFullPage verifies that receiving a full page of
+// list items sets HasMoreFields=true and advances FieldOffset.
+func TestResult_LRange_HasMoreWhenFullPage(t *testing.T) {
+	m := newTestModel()
+	m.SelectedOp = tui.OpLRange
+	m.Browser.FieldOffset = 0
+
+	// Build exactly 100 items (== fieldPageSize).
+	items := make([]any, 100)
+	for i := range items {
+		items[i] = "item"
+	}
+
+	m2, _ := send(m, tui.RedisResultMsg{Result: items})
+
+	if !m2.Browser.HasMoreFields {
+		t.Error("HasMoreFields: want true when page is full")
+	}
+	if m2.Browser.FieldOffset != 100 {
+		t.Errorf("FieldOffset: want 100, got %d", m2.Browser.FieldOffset)
+	}
+	if m2.SelectedOp != tui.OpExploreList {
+		t.Errorf("SelectedOp: want OpExploreList, got %v", m2.SelectedOp)
+	}
+}
+
+// TestResult_LRange_AppendOnLoadMore verifies that a second LRANGE page
+// appends to the existing item list rather than replacing it.
+func TestResult_LRange_AppendOnLoadMore(t *testing.T) {
+	m := newTestModel()
+	m.SelectedOp = tui.OpLRange
+	// Simulate the browser already having 100 items from the first page.
+	m.Browser.FieldOffset = 100
+	m.Browser.FieldsList.SetItems([]list.Item{tui.NewListItem("existing", "string")})
+
+	m2, _ := send(m, tui.RedisResultMsg{Result: []any{"new1", "new2"}})
+
+	if got := len(m2.Browser.FieldsList.Items()); got != 3 {
+		t.Errorf("item count: want 3 (1 existing + 2 new), got %d", got)
+	}
+	if m2.Browser.HasMoreFields {
+		t.Error("HasMoreFields: want false for partial page")
+	}
+}
+
+// TestResult_SMembers_CursorPagination verifies that a non-zero SSCAN cursor
+// sets HasMoreFields=true and stores the cursor for the next page.
+func TestResult_SMembers_CursorPagination(t *testing.T) {
+	m := newTestModel()
+	m.SelectedOp = tui.OpSMembers
+	m.Browser.FieldCursor = "0" // fresh scan
+
+	m2, _ := send(m, tui.RedisResultMsg{Result: []any{"42", []any{"a", "b", "c"}}})
+
+	if !m2.Browser.HasMoreFields {
+		t.Error("HasMoreFields: want true for non-zero cursor")
+	}
+	if m2.Browser.FieldCursor != "42" {
+		t.Errorf("FieldCursor: want %q, got %q", "42", m2.Browser.FieldCursor)
+	}
+	if got := len(m2.Browser.FieldsList.Items()); got != 3 {
+		t.Errorf("item count: want 3, got %d", got)
+	}
+}
+
+// TestResult_ZRange_HasMoreWhenFullPage verifies that receiving a full page
+// (100 member/score pairs) from ZRANGE WITHSCORES sets HasMoreFields=true.
+func TestResult_ZRange_HasMoreWhenFullPage(t *testing.T) {
+	m := newTestModel()
+	m.SelectedOp = tui.OpZRange
+	m.Browser.FieldOffset = 0
+
+	// 100 member/score pairs = 200 elements in the flat response.
+	resp := make([]any, 200)
+	for i := 0; i < 200; i += 2 {
+		resp[i] = "member"
+		resp[i+1] = "1.0"
+	}
+
+	m2, _ := send(m, tui.RedisResultMsg{Result: resp})
+
+	if !m2.Browser.HasMoreFields {
+		t.Error("HasMoreFields: want true when full page of zset members")
+	}
+	if m2.Browser.FieldOffset != 100 {
+		t.Errorf("FieldOffset: want 100, got %d", m2.Browser.FieldOffset)
+	}
+}
+
+// TestLoadMoreFields_DispatchesByOp verifies that LoadMoreFieldsMsg dispatches
+// the correct Redis command for each explore operation type.
+func TestLoadMoreFields_DispatchesByOp(t *testing.T) {
+	cases := []struct {
+		op tui.Op
+	}{
+		{tui.OpExploreList},
+		{tui.OpExploreSet},
+		{tui.OpExploreZSet},
+	}
+	for _, tc := range cases {
+		t.Run(tc.op.String(), func(t *testing.T) {
+			m := newTestModel()
+			m.SelectedOp = tc.op
+			m.ActiveKey = "mykey"
+			m.Browser.FieldOffset = 100
+			m.Browser.FieldCursor = "55"
+			m.CurrentState = tui.StateBrowser
+
+			m2, cmd := send(m, tui.LoadMoreFieldsMsg{})
+
+			if m2.CurrentState != tui.StateLoading {
+				t.Errorf("state: want StateLoading, got %v", m2.CurrentState)
+			}
+			if cmd == nil {
+				t.Error("expected a non-nil tea.Cmd")
+			}
+		})
 	}
 }

@@ -75,54 +75,98 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 
 	case OpLRange:
 		if resp, ok := msg.Result.([]any); ok {
-			var items []list.Item
-			for index, key := range resp {
-				if key, ok := key.(string); ok {
-					items = append(items, ListItem{index: index, title: key, desc: "Index: " + strconv.Itoa(index)})
+			baseIndex := m.Browser.FieldOffset
+			var newItems []list.Item
+			for i, v := range resp {
+				if s, ok := v.(string); ok {
+					idx := baseIndex + i
+					newItems = append(newItems, ListItem{index: idx, title: s, desc: "Index: " + strconv.Itoa(idx)})
 				}
 			}
+			if baseIndex == 0 {
+				m.Browser.FieldsList.SetItems(newItems)
+			} else {
+				existing := m.Browser.FieldsList.Items()
+				m.Browser.FieldsList.SetItems(append(existing, newItems...))
+			}
+			if len(resp) >= fieldPageSize {
+				m.Browser.HasMoreFields = true
+				m.Browser.FieldOffset += len(resp)
+			} else {
+				m.Browser.HasMoreFields = false
+			}
 			m.SelectedOp = OpExploreList
-			m.Browser.FieldsList.SetItems(items)
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
 		}
 
 	case OpSMembers:
-		if resp, ok := msg.Result.([]any); ok {
-			var items []list.Item
-			for index, key := range resp {
-				if key, ok := key.(string); ok {
-					items = append(items, ListItem{index: index, title: key, desc: "Index: " + strconv.Itoa(index)})
+		// SSCAN response: []any{cursor_string, []any{member1, member2, ...}}
+		if resp, ok := msg.Result.([]any); ok && len(resp) == 2 {
+			newCursor, _ := resp[0].(string)
+			members, _ := resp[1].([]any)
+			isFirstPage := m.Browser.FieldCursor == "" || m.Browser.FieldCursor == "0"
+			baseIndex := 0
+			if !isFirstPage {
+				baseIndex = len(m.Browser.FieldsList.Items())
+			}
+			var newItems []list.Item
+			for i, v := range members {
+				if s, ok := v.(string); ok {
+					newItems = append(newItems, ListItem{index: baseIndex + i, title: s, desc: "Index: " + strconv.Itoa(baseIndex+i)})
 				}
 			}
+			if isFirstPage {
+				m.Browser.FieldsList.SetItems(newItems)
+			} else {
+				existing := m.Browser.FieldsList.Items()
+				m.Browser.FieldsList.SetItems(append(existing, newItems...))
+			}
+			m.Browser.FieldCursor = newCursor
+			m.Browser.HasMoreFields = newCursor != "0"
 			m.SelectedOp = OpExploreSet
-			m.Browser.FieldsList.SetItems(items)
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
 		}
 
 	case OpZRange:
 		if resp, ok := msg.Result.([]any); ok {
-			var items []list.Item
-			for i := 0; i < len(resp); i += 2 {
+			baseOffset := m.Browser.FieldOffset
+			var newItems []list.Item
+			for i := 0; i+1 < len(resp); i += 2 {
 				member, ok1 := resp[i].(string)
 				score := "unknown"
-				if i+1 < len(resp) {
-					if s, ok2 := resp[i+1].(string); ok2 {
-						score = s
-					}
+				if s, ok2 := resp[i+1].(string); ok2 {
+					score = s
 				}
 				if ok1 {
-					items = append(items, ListItem{title: member, desc: "Score: " + score})
+					newItems = append(newItems, ListItem{title: member, desc: "Score: " + score})
 				}
 			}
+			memberCount := len(resp) / 2
+			if baseOffset == 0 {
+				m.Browser.FieldsList.SetItems(newItems)
+			} else {
+				existing := m.Browser.FieldsList.Items()
+				m.Browser.FieldsList.SetItems(append(existing, newItems...))
+			}
+			if memberCount >= fieldPageSize {
+				m.Browser.HasMoreFields = true
+				m.Browser.FieldOffset += memberCount
+			} else {
+				m.Browser.HasMoreFields = false
+			}
 			m.SelectedOp = OpExploreZSet
-			m.Browser.FieldsList.SetItems(items)
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
 		}
 
 	case OpCheckType:
+		// Reset field pagination state whenever we open a key fresh.
+		m.Browser.FieldOffset = 0
+		m.Browser.FieldCursor = ""
+		m.Browser.HasMoreFields = false
+
 		if str, ok := msg.Result.(string); ok {
 			switch str {
 			case "string":
@@ -133,13 +177,16 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "HKEYS", Args: []string{m.ActiveKey}}, m.ReadTimeout))
 			case "list":
 				m.SelectedOp = OpLRange
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", "-1"}}, m.ReadTimeout))
+				end := strconv.Itoa(fieldPageSize - 1)
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", end}}, m.ReadTimeout))
 			case "set":
 				m.SelectedOp = OpSMembers
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SMEMBERS", Args: []string{m.ActiveKey}}, m.ReadTimeout))
+				count := strconv.Itoa(fieldPageSize)
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SSCAN", Args: []string{m.ActiveKey, "0", "COUNT", count}}, m.ReadTimeout))
 			case "zset":
 				m.SelectedOp = OpZRange
-				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", "-1", "WITHSCORES"}}, m.ReadTimeout))
+				end := strconv.Itoa(fieldPageSize - 1)
+				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", end, "WITHSCORES"}}, m.ReadTimeout))
 			case "none":
 				m.Output = "Key does not exist or has expired."
 				m.CurrentState = StateOutput
@@ -200,20 +247,29 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 
 	case OpLRem:
 		m.Output = "Removed element from list: " + m.ActiveKey
+		m.Browser.FieldOffset = 0
+		m.Browser.HasMoreFields = false
 		m.SelectedOp = OpLRange
-		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", "-1"}}, m.ReadTimeout))
+		end := strconv.Itoa(fieldPageSize - 1)
+		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", end}}, m.ReadTimeout))
 
 	case OpSRem:
 		m.Output = "Removed element from set: " + m.ActiveKey
+		m.Browser.FieldCursor = ""
+		m.Browser.HasMoreFields = false
 		m.SelectedOp = OpSMembers
-		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SMEMBERS", Args: []string{m.ActiveKey}}, m.ReadTimeout))
+		count := strconv.Itoa(fieldPageSize)
+		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SSCAN", Args: []string{m.ActiveKey, "0", "COUNT", count}}, m.ReadTimeout))
 
 	case OpZRem:
 		m.Output = "Removed element from sorted set: " + m.ActiveKey
+		m.Browser.FieldOffset = 0
+		m.Browser.HasMoreFields = false
 		m.SelectedOp = OpZRange
-		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", "-1", "WITHSCORES"}}, m.ReadTimeout))
+		end := strconv.Itoa(fieldPageSize - 1)
+		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", end, "WITHSCORES"}}, m.ReadTimeout))
 
-	case OpDelete, OpHSet, OpRPush, OpSAdd, OpZAdd:
+	case OpDelete, OpHSet, OpRPush, OpLPush, OpSAdd, OpZAdd:
 		if res, ok := msg.Result.(int); ok {
 			m.Output = strconv.Itoa(res)
 		} else {
@@ -229,6 +285,7 @@ func handleStateOutputKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch keyMsg.String() {
 	case "esc":
 		m.Input.Input.SetValue("")
+		m.Input.Hint = ""
 		m.Output = ""
 		m.ActiveTTL = ""
 		m.CopyStatus = ""
@@ -298,6 +355,7 @@ func handleStateOutputKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.SelectedOp = OpExpirySet
 		m.Input.Input.SetValue("")
 		m.Input.Type = InputValue
+		m.Input.Hint = "TTL in seconds (enter 0 to remove expiry / PERSIST):"
 		m.Input.Input.Focus()
 		m.pushState(m.CurrentState)
 		m.CurrentState = StateInputValue

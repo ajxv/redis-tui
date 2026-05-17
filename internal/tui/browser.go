@@ -44,6 +44,11 @@ type BrowserModel struct {
 	Cursor  string
 	Pattern string
 	HasMore bool
+
+	// Field-level pagination (lists, sets, sorted sets)
+	FieldCursor   string // SSCAN cursor for set pages; "" = first page
+	FieldOffset   int    // item offset for list/zset pages
+	HasMoreFields bool   // shows "n: load more" hint in field view
 }
 
 func (m BrowserModel) Init() tea.Cmd {
@@ -70,6 +75,8 @@ type DeleteRequestMsg struct {
 }
 
 type LoadMoreKeysMsg struct{}
+
+type LoadMoreFieldsMsg struct{}
 
 type RenameRequestMsg struct {
 	Key string
@@ -124,6 +131,11 @@ func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 			}
 
 		case "n":
+			if m.ViewingFields && m.HasMoreFields {
+				return m, func() tea.Msg {
+					return LoadMoreFieldsMsg{}
+				}
+			}
 			if !m.ViewingFields && m.HasMore {
 				return m, func() tea.Msg {
 					return LoadMoreKeysMsg{}
@@ -180,7 +192,11 @@ func (m BrowserModel) View() string {
 
 	if m.ViewingFields {
 		listView = m.FieldsList.View()
-		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • ctrl+r: refresh")
+		fieldMoreHint := ""
+		if m.HasMoreFields {
+			fieldMoreHint = " • n: load more"
+		}
+		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • ctrl+r: refresh" + fieldMoreHint)
 	} else {
 		listView = m.KeyList.View()
 		moreHint := ""

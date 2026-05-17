@@ -135,7 +135,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
-			case OpSet, OpRPush, OpSAdd:
+			case OpSet, OpRPush, OpLPush, OpSAdd:
 				m.pushState(m.CurrentState)
 				m.CurrentState = StateInputValue
 				m.Input.Type = InputValue
@@ -221,7 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
-			case OpRPush, OpSAdd:
+			case OpRPush, OpLPush, OpSAdd:
 				// send command
 				cmd := redis.RedisCmd{
 					Name: m.SelectedOp.String(),
@@ -370,6 +370,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LoadMoreKeysMsg:
 		return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, m.Browser.Pattern, m.Browser.Cursor))
 
+	case LoadMoreFieldsMsg:
+		switch m.SelectedOp {
+		case OpExploreList:
+			end := m.Browser.FieldOffset + fieldPageSize - 1
+			cmd := redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, strconv.Itoa(m.Browser.FieldOffset), strconv.Itoa(end)}}
+			m.SelectedOp = OpLRange
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
+		case OpExploreSet:
+			cmd := redis.RedisCmd{Name: "SSCAN", Args: []string{m.ActiveKey, m.Browser.FieldCursor, "COUNT", strconv.Itoa(fieldPageSize)}}
+			m.SelectedOp = OpSMembers
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
+		case OpExploreZSet:
+			end := m.Browser.FieldOffset + fieldPageSize - 1
+			cmd := redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, strconv.Itoa(m.Browser.FieldOffset), strconv.Itoa(end), "WITHSCORES"}}
+			m.SelectedOp = OpZRange
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
+		}
+
 	case RefreshMsg:
 		if m.Browser.ViewingFields {
 			// Instead of trusting stale state, let's confidently check the key TYPE again.
@@ -405,7 +423,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pushState(m.CurrentState)
 
 					switch m.SelectedOp {
-					case OpSet, OpGet, OpHSet, OpHGet, OpDelete, OpRPush, OpSAdd, OpZAdd, OpExport:
+					case OpSet, OpGet, OpHSet, OpHGet, OpDelete, OpRPush, OpLPush, OpSAdd, OpZAdd, OpExport:
 						m.Input.Input.Focus()
 						m.Input.Input.SetValue("") // Clear previous input
 						m.CurrentState = StateInputKey

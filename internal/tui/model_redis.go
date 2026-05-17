@@ -156,7 +156,9 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 					// Pipeline TYPE commands
 					for _, k := range rawKeys {
 						cmd := redis.RedisCmd{Name: "TYPE", Args: []string{k}}
-						conn.Write(cmd.ToBytes())
+						if _, err := conn.Write(cmd.ToBytes()); err != nil {
+							return RedisResultMsg{Error: err}
+						}
 					}
 
 					// Read pipelined responses

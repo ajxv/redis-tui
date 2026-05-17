@@ -17,7 +17,12 @@ import (
 	"github.com/ajxv/redis-tui/internal/tui"
 )
 
+// version is set at build time via -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func run() error {
+	versionFlag := flag.Bool("version", false, "Print version and exit")
+
 	// Connection flags
 	host := flag.String("host", "localhost:6379", "Redis server host:port")
 	password := flag.String("password", os.Getenv("REDIS_PASSWORD"), "Redis password (default: $REDIS_PASSWORD)")
@@ -35,6 +40,11 @@ func run() error {
 	tlsCA := flag.String("tls-ca", "", "Path to CA certificate (PEM)")
 
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("redis-tui %s\n", version)
+		return nil
+	}
 
 	// URL overrides individual flags when provided
 	if *redisURL != "" {
@@ -88,6 +98,7 @@ func run() error {
 		tui.NewListItem("HSET", "Set a hash field"),
 		tui.NewListItem("HGET", "Get the value of a hash field"),
 		tui.NewListItem("RPUSH", "Add value to the end of a list"),
+		tui.NewListItem("LPUSH", "Add value to the beginning of a list"),
 		tui.NewListItem("SADD", "Add value to a set"),
 		tui.NewListItem("ZADD", "Add value to a sorted set"),
 		tui.NewListItem("DELETE", "Delete a key-value pair or an entire hash"),

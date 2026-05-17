@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0-beta] - 2026-05-17
 
 ### Added
 - **Interactive Terminal User Interface (TUI)** for exploring and managing Redis databases.
@@ -27,3 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Built-in guard rails to prevent UI deadlocks when interacting with keys that have expired in the background.
 - Clean input field state management across diverse form wizards.
 - Strictly enforced read-only execution limits for `INFO` screens and internal list navigation fields.
+- `LPUSH` command support for prepending values to a list.
+- Field-level pagination for Lists (LRANGE), Sets (SSCAN), and Sorted Sets (ZRANGE) — loads 100 items per page, press `n` for more.
+- `--version` flag to print the current binary version and exit.
+- Context-aware TTL input hint: "0 = remove expiry (PERSIST)" shown when setting TTL.
+- TLS support with mTLS and custom CA for secure Redis connections.
+- Redis URL (`redis://` / `rediss://`) connection string support.
+- Export / Import keys and entire databases via JSON (`DUMP`/`RESTORE`).
+- Exponential backoff reconnection (200 ms → 25.6 s cap) on connection loss.
+
+[1.0.0-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.0.0-beta

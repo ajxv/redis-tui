@@ -6,6 +6,8 @@ import (
 	"net"
 )
 
+const fieldPageSize = 100
+
 type AppState int
 
 const (
@@ -32,6 +34,7 @@ const (
 	OpHGet
 	OpHKeys
 	OpRPush
+	OpLPush
 	OpSAdd
 	OpZAdd
 	OpDelete
@@ -74,6 +77,8 @@ func (o Op) String() string {
 		return "HKEYS"
 	case OpRPush:
 		return "RPUSH"
+	case OpLPush:
+		return "LPUSH"
 	case OpSAdd:
 		return "SADD"
 	case OpZAdd:
@@ -126,6 +131,8 @@ func ParseOp(s string) Op {
 		return OpHKeys
 	case "RPUSH":
 		return OpRPush
+	case "LPUSH":
+		return OpLPush
 	case "SADD":
 		return OpSAdd
 	case "ZADD":
