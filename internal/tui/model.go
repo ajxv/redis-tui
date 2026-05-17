@@ -2,15 +2,11 @@ package tui
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
-	"time"
 
 	"github.com/ajxv/redis-tui/internal/redis"
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -31,6 +27,7 @@ type Model struct {
 	ActiveIndex            int
 	ActiveValue            string
 	ActiveTTL              string
+	PreservedTTL           int
 	CopyStatus             string
 	SelectedOp             Op
 	Conn                   net.Conn
@@ -46,7 +43,10 @@ type Model struct {
 }
 
 func (m *Model) pushState(state AppState) {
-	// push state onto stack
+	n := len(m.StateNavigationHistory)
+	if n > 0 && m.StateNavigationHistory[n-1] == state {
+		return
+	}
 	m.StateNavigationHistory = append(m.StateNavigationHistory, state)
 }
 
@@ -252,13 +252,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			switch m.SelectedOp {
 			case OpExport:
-				return m.switchToLoadingAndExecute(exportSingleKey(m.Conn, m.Reader, m.ActiveKey, filePath))
+				return m.switchToLoadingAndExecute(ExportSingleKey(m.Conn, m.Reader, m.ActiveKey, filePath))
 			case OpImport:
-				return m.switchToLoadingAndExecute(importSingleKeyOrDB(m.Conn, m.Reader, filePath))
+				return m.switchToLoadingAndExecute(ImportKeys(m.Conn, m.Reader, filePath))
 			case OpExportDB:
-				return m.switchToLoadingAndExecute(exportFullDB(m.Conn, m.Reader, filePath))
+				return m.switchToLoadingAndExecute(ExportFullDB(m.Conn, m.Reader, filePath))
 			case OpImportDB:
-				return m.switchToLoadingAndExecute(importSingleKeyOrDB(m.Conn, m.Reader, filePath))
+				return m.switchToLoadingAndExecute(ImportKeys(m.Conn, m.Reader, filePath))
 			}
 		}
 
@@ -394,287 +394,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, pattern, "0"))
 		}
 	case RedisResultMsg:
-		if msg.Error != nil {
-			var netError net.Error
-			if msg.Error == io.EOF || errors.As(msg.Error, &netError) {
-				// retry connection for connection errors (server restart)
-				if m.CurrentState != StateLoading {
-					m.pushState(m.CurrentState)
-				}
-				m.CurrentState = StateLoading
-				return m, connectToRedis(m.RedisAddress, m.Password, m.DB)
-			}
-
-			m.Output = msg.Error.Error()
-			m.CurrentState = StateOutput
-			return m, nil
-		}
-
-		switch m.SelectedOp {
-		case OpGet, OpHGet, OpInfo:
-			if result, ok := msg.Result.(string); ok {
-				m.Output = result
-				m.CurrentState = StateOutput
-				if m.SelectedOp != OpInfo {
-					m.ActiveTTL = "fetching..."
-					return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey)
-				}
-			}
-
-		case OpHKeys:
-			if result, ok := msg.Result.([]any); ok {
-				var items []list.Item
-				for _, key := range result {
-					if key, ok := key.(string); ok {
-						items = append(items, ListItem{title: key, desc: "Hash Field"})
-					}
-				}
-				// update browsers field list
-				m.Browser.FieldsList.SetItems(items)
-				// tell browser we are looking at fields
-				m.Browser.ViewingFields = true
-				// switch to browser state
-				m.CurrentState = StateBrowser
-
-			}
-
-		case OpExplore:
-			if result, ok := msg.Result.(ScanResult); ok {
-				if m.Browser.Cursor == "0" || m.Browser.Cursor == "" {
-					// update browsers keylist entirely
-					m.Browser.KeyList.SetItems(result.Keys)
-				} else {
-					// append to the current list
-					items := m.Browser.KeyList.Items()
-					for _, k := range result.Keys {
-						items = append(items, k)
-					}
-					m.Browser.KeyList.SetItems(items)
-				}
-				m.Browser.Cursor = result.Cursor
-				m.Browser.ViewingFields = false
-				m.CurrentState = StateBrowser
-			}
-
-		case OpLRange:
-			if resp, ok := msg.Result.([]any); ok {
-				var items []list.Item
-				for index, key := range resp {
-					if key, ok := key.(string); ok {
-						items = append(items, ListItem{index: index, title: key, desc: "Index: " + strconv.Itoa(index)})
-					}
-				}
-				m.SelectedOp = OpExploreList
-				// update browsers field list
-				m.Browser.FieldsList.SetItems(items)
-				// tell browser we are looking at fields
-				m.Browser.ViewingFields = true
-				// switch to browser state
-				m.CurrentState = StateBrowser
-
-			}
-
-		case OpSMembers:
-			if resp, ok := msg.Result.([]any); ok {
-				var items []list.Item
-				for index, key := range resp {
-					if key, ok := key.(string); ok {
-						items = append(items, ListItem{index: index, title: key, desc: "Index: " + strconv.Itoa(index)})
-					}
-				}
-				m.SelectedOp = OpExploreSet
-				// update browsers field list
-				m.Browser.FieldsList.SetItems(items)
-				// tell browser we are looking at fields
-				m.Browser.ViewingFields = true
-				// switch to browser state
-				m.CurrentState = StateBrowser
-
-			}
-
-		case OpZRange:
-			if resp, ok := msg.Result.([]any); ok {
-				var items []list.Item
-				// iterate by steps of 2 to handle scores
-				for i := 0; i < len(resp); i += 2 {
-					// The member is at 'i'
-					member, ok1 := resp[i].(string)
-
-					// The score is at 'i+1'
-					score := "unknown"
-					if i+1 < len(resp) {
-						if s, ok2 := resp[i+1].(string); ok2 {
-							score = s
-						}
-					}
-
-					if ok1 {
-						items = append(items, ListItem{title: member, desc: "Score: " + score})
-					}
-				}
-				m.SelectedOp = OpExploreZSet
-				// update browsers field list
-				m.Browser.FieldsList.SetItems(items)
-				// tell browser we are looking at fields
-				m.Browser.ViewingFields = true
-				// switch to browser state
-				m.CurrentState = StateBrowser
-
-			}
-
-		case OpCheckType:
-			if str, ok := msg.Result.(string); ok {
-				switch str {
-				case "string":
-					cmd := redis.RedisCmd{
-						Name: "GET",
-						Args: []string{m.ActiveKey},
-					}
-
-					m.SelectedOp = OpGet
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-				case "hash":
-					cmd := redis.RedisCmd{
-						Name: "HKEYS",
-						Args: []string{m.ActiveKey},
-					}
-
-					m.SelectedOp = OpHKeys
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-				case "list":
-					cmd := redis.RedisCmd{
-						Name: "LRANGE",
-						Args: []string{m.ActiveKey, "0", "-1"},
-					}
-
-					m.SelectedOp = OpLRange
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-				case "set":
-					cmd := redis.RedisCmd{
-						Name: "SMEMBERS",
-						Args: []string{m.ActiveKey},
-					}
-
-					m.SelectedOp = OpSMembers
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-				case "zset":
-					cmd := redis.RedisCmd{
-						Name: "ZRANGE",
-						Args: []string{m.ActiveKey, "0", "-1", "WITHSCORES"},
-					}
-
-					m.SelectedOp = OpZRange
-					return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-				case "none":
-					m.Output = "Key does not exist or has expired."
-					m.CurrentState = StateOutput
-					return m, nil
-					
-				default:
-					m.Output = "Unknown key type: " + str
-					m.CurrentState = StateOutput
-					return m, nil
-				}
-			} else {
-				m.Output = "Unexpected response"
-				m.CurrentState = StateOutput
-			}
-
-		case OpSet, OpLSet, OpRename, OpExpirySet, OpExport, OpImport, OpExportDB, OpImportDB:
-			if str, ok := msg.Result.(string); ok {
-				m.Output = str
-			} else if num, ok := msg.Result.(int); ok {
-				m.Output = strconv.Itoa(num)
-			} else {
-				m.Output = "Unexpected response"
-			}
-			m.CurrentState = StateOutput
-
-			// If it's a rename or expiry set, update the TTL
-			if m.SelectedOp == OpExpirySet || m.SelectedOp == OpRename {
-				m.ActiveTTL = "fetching..."
-				return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey)
-			}
-
-		case OpDel:
-			m.Output = "Deleted Key: " + m.ActiveKey
-
-			m.SelectedOp = OpExplore
-			// refresh the keylist using the last pattern searched
-			pattern := m.LastPattern
-			if pattern == "" {
-				pattern = "*"
-			}
-			m.Browser.Cursor = "0"
-			m.Browser.Pattern = pattern
-			return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, pattern, "0"))
-
-		case OpHDel:
-			m.Output = "Deleted Hash Key: " + m.ActiveKey
-
-			cmd := redis.RedisCmd{
-				Name: "HKEYS",
-				Args: []string{m.ActiveKey},
-			}
-
-			m.SelectedOp = OpHKeys
-
-			// refresh the keylist
-			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-		case OpLRem:
-			m.Output = "Removed element from list: " + m.ActiveKey
-
-			cmd := redis.RedisCmd{
-				Name: "LRANGE",
-				Args: []string{m.ActiveKey, "0", "-1"},
-			}
-
-			m.SelectedOp = OpLRange
-
-			// refresh the keylist
-			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-		case OpSRem:
-			m.Output = "Removed element from set: " + m.ActiveKey
-
-			cmd := redis.RedisCmd{
-				Name: "SMEMBERS",
-				Args: []string{m.ActiveKey},
-			}
-
-			m.SelectedOp = OpSMembers
-
-			// refresh the keylist
-			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-		case OpZRem:
-			m.Output = "Removed element from sorted set: " + m.ActiveKey
-
-			cmd := redis.RedisCmd{
-				Name: "ZRANGE",
-				Args: []string{m.ActiveKey, "0", "-1", "WITHSCORES"},
-			}
-
-			m.SelectedOp = OpZRange
-
-			// refresh the keylist
-			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd))
-
-		case OpDelete, OpHSet, OpRPush, OpSAdd, OpZAdd:
-			if res, ok := msg.Result.(int); ok {
-				m.Output = strconv.Itoa(res)
-			} else {
-				m.Output = "Unexpected response"
-			}
-			m.CurrentState = StateOutput
-
-		}
+		return handleRedisResult(m, msg)
 	}
 
 	switch m.CurrentState {
@@ -730,93 +450,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case StateOutput:
-		keyMsg, ok := msg.(tea.KeyMsg)
-		if ok {
-			switch keyMsg.String() {
-			case "esc":
-				m.Input.Input.SetValue("")
-				m.Output = ""
-				m.ActiveTTL = ""
-				m.CopyStatus = ""
-
-				previousState := m.popState()
-				// 1. Handle the "Edit Loop" artifact
-				// If the previous state was ALSO Output, pop one more time to find the List.
-				if previousState == StateOutput {
-					previousState = m.popState()
-				}
-
-				// 2. Handle the "Creation Flow" (Hard Reset)
-				if previousState == StateInputKey || previousState == StateInputField || previousState == StateInputFilePath {
-					m.StateNavigationHistory = []AppState{} // Clear history
-					m.CurrentState = StateMenu              // Go to Menu
-					return m, nil
-				}
-
-				// 3. Fallback: Go to the previous state (Browser or List)
-				m.CurrentState = previousState
-
-				// 4. GLOBAL CLEANUP: Reset the Op Mode
-				// This ensures that 'Enter' works again when we land on the List.
-				switch m.SelectedOp {
-				case OpLSet:
-					m.SelectedOp = OpExploreList
-				case OpHSet:
-					m.SelectedOp = OpHKeys
-				}
-
-				return m, nil
-
-			case "e":
-				if m.SelectedOp == OpInfo {
-					break
-				}
-				m.Input.Input.SetValue(m.Output)
-				switch m.SelectedOp {
-				case OpGet:
-					m.SelectedOp = OpSet
-
-				case OpHGet:
-					m.SelectedOp = OpHSet
-
-				case OpExploreList:
-					m.SelectedOp = OpLSet
-				}
-
-				m.Input.Type = InputValue
-				m.Input.Input.Focus()
-				m.Input.Input.CursorEnd()
-				m.pushState(m.CurrentState)
-				m.CurrentState = StateInputValue
-
-			case "c":
-				err := clipboard.WriteAll(m.Output)
-				if err != nil {
-					m.CopyStatus = "Clipboard unavailable (xclip/xsel missing?)"
-				} else {
-					m.CopyStatus = "Copied to clipboard!"
-				}
-				return m, func() tea.Msg {
-					time.Sleep(2 * time.Second)
-					return ClearCopyStatusMsg{}
-				}
-
-			case "r":
-				if m.SelectedOp == OpInfo {
-					break
-				}
-
-			case "x":
-				if m.SelectedOp == OpInfo {
-					break
-				}
-				m.SelectedOp = OpExpirySet
-				m.Input.Input.SetValue("")
-				m.Input.Type = InputValue
-				m.Input.Input.Focus()
-				m.pushState(m.CurrentState)
-				m.CurrentState = StateInputValue
-			}
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			return handleStateOutputKey(m, keyMsg)
 		}
 
 	case StateBrowser:
@@ -825,63 +460,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case StateConfirmation:
-		keyMsg, ok := msg.(tea.KeyMsg)
-		if ok {
-			switch keyMsg.String() {
-			case "esc", "n", "N":
-				m.CurrentState = m.popState()
-				return m, nil
-
-			case "y", "Y":
-
-				m.popState()
-
-				switch m.SelectedOp {
-				case OpQuit:
-					return m, tea.Quit
-				case OpDel:
-					cmd := redis.RedisCmd{
-						Name: m.SelectedOp.String(),
-						Args: []string{m.ActiveKey},
-					}
-
-					// MANUAL LOADING (Preserve History)
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
-
-				case OpHDel:
-					cmd := redis.RedisCmd{
-						Name: m.SelectedOp.String(),
-						Args: []string{m.ActiveKey, m.ActiveField},
-					}
-
-					// MANUAL LOADING (Preserve History)
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
-
-				case OpLRem:
-					cmd := redis.RedisCmd{
-						Name: m.SelectedOp.String(),
-						Args: []string{m.ActiveKey, "1", m.ActiveField}, // removes one instance of element
-					}
-
-					// MANUAL LOADING (Preserve History)
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
-
-				case OpSRem, OpZRem:
-					cmd := redis.RedisCmd{
-						Name: m.SelectedOp.String(),
-						Args: []string{m.ActiveKey, m.ActiveField},
-					}
-
-					// MANUAL LOADING (Preserve History)
-					m.CurrentState = StateLoading
-					return m, sendRedisCmd(m.Conn, m.Reader, cmd)
-
-				}
-
-			}
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			return handleStateConfirmationKey(m, keyMsg)
 		}
 
 	}

@@ -19,7 +19,7 @@ func run() error {
 	// parse cmdline args
 	// define flags
 	host := flag.String("host", "localhost:6379", "Redis Server host: <host:port>")
-	password := flag.String("password", "", "Redis Server password")
+	password := flag.String("password", os.Getenv("REDIS_PASSWORD"), "Redis Server password (default: $REDIS_PASSWORD env var)")
 	db := flag.Int("db", 0, "Redis Database index")
 	//parse flags
 	flag.Parse()

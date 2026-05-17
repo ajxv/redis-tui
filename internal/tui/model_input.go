@@ -12,8 +12,6 @@ const (
 	InputKey
 	InputField
 	InputValue
-	InputScore
-	InputMember
 	InputPattern
 	InputFilePath
 )
@@ -66,10 +64,6 @@ func (m InputModel) View() string {
 		title = "Input the Value:"
 	case InputField:
 		title = "Input the Field:"
-	case InputScore:
-		title = "Input the Score:"
-	case InputMember:
-		title = "Input the Member:"
 	case InputPattern:
 		title = "Input the search pattern:"
 	case InputFilePath:

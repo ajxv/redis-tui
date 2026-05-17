@@ -157,7 +157,9 @@ func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd) tea.C
 				Error: err,
 			}
 		}
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		response, err := redis.ReadResp(reader)
+		conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			return RedisResultMsg{
 				Error: err,
@@ -183,7 +185,9 @@ func fetchTTL(conn net.Conn, reader *bufio.Reader, key string) tea.Cmd {
 		if err != nil {
 			return RedisTTLResultMsg{TTL: -2}
 		}
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		response, err := redis.ReadResp(reader)
+		conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			return RedisTTLResultMsg{TTL: -2}
 		}

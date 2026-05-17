@@ -1,4 +1,4 @@
-.PHONY: build run test fmt lint clean
+.PHONY: build run test fmt lint lint-optional clean
 
 BINARY_NAME=redis-tui
 MAIN_PATH=./cmd/redis-tui
@@ -16,6 +16,9 @@ fmt:
 	go fmt ./...
 
 lint:
+	golangci-lint run ./...
+
+lint-optional:
 	golangci-lint run ./... || echo "Install golangci-lint: https://golangci-lint.run/usage/install/"
 
 clean:

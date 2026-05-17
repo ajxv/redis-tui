@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ajxv/redis-tui/internal/redis"
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,7 +42,7 @@ func resolveFilePath(path string, createDirs bool) (string, error) {
 	return path, nil
 }
 
-func exportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath string) tea.Cmd {
+func ExportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath string) tea.Cmd {
 	return func() tea.Msg {
 		if conn == nil {
 			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
@@ -58,7 +59,9 @@ func exportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath s
 		if err != nil {
 			return RedisResultMsg{Error: err}
 		}
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		resp, err := redis.ReadResp(reader)
+		conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			return RedisResultMsg{Error: err}
 		}
@@ -70,8 +73,15 @@ func exportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath s
 
 		// Issue PTTL command
 		pttlCmd := redis.RedisCmd{Name: "PTTL", Args: []string{key}}
-		conn.Write(pttlCmd.ToBytes())
-		pttlResp, _ := redis.ReadResp(reader)
+		if _, err = conn.Write(pttlCmd.ToBytes()); err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("PTTL write failed: %v", err)}
+		}
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		pttlResp, err := redis.ReadResp(reader)
+		conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("PTTL read failed: %v", err)}
+		}
 		ttl := -1
 		if p, ok := pttlResp.(int); ok {
 			ttl = p
@@ -90,7 +100,7 @@ func exportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath s
 			return RedisResultMsg{Error: fmt.Errorf("failed to marshal JSON: %v", err)}
 		}
 
-		err = os.WriteFile(resolvedPath, fileData, 0644)
+		err = os.WriteFile(resolvedPath, fileData, 0600)
 		if err != nil {
 			return RedisResultMsg{Error: fmt.Errorf("failed to write file: %v", err)}
 		}
@@ -99,7 +109,7 @@ func exportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath s
 	}
 }
 
-func importSingleKeyOrDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
+func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 	return func() tea.Msg {
 		if conn == nil {
 			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
@@ -144,9 +154,11 @@ func importSingleKeyOrDB(conn net.Conn, reader *bufio.Reader, filePath string) t
 				},
 			}
 			conn.Write(cmd.ToBytes())
+			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			resp, err := redis.ReadResp(reader)
+			conn.SetReadDeadline(time.Time{})
 			if err == nil {
-				if _, ok := resp.(string); ok || resp == "OK" {
+				if strResp, ok := resp.(string); ok && strResp == "OK" {
 					importedCount++
 				}
 			}
@@ -156,7 +168,7 @@ func importSingleKeyOrDB(conn net.Conn, reader *bufio.Reader, filePath string) t
 	}
 }
 
-func exportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
+func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 	return func() tea.Msg {
 		if conn == nil {
 			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
@@ -176,7 +188,9 @@ func exportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 				Args: []string{cursor},
 			}
 			conn.Write(cmd.ToBytes())
+			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			response, err := redis.ReadResp(reader)
+			conn.SetReadDeadline(time.Time{})
 			if err != nil {
 				return RedisResultMsg{Error: err}
 			}
@@ -198,7 +212,9 @@ func exportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 			for _, key := range keys {
 				// DUMP
 				conn.Write(redis.RedisCmd{Name: "DUMP", Args: []string{key}}.ToBytes())
+				conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 				dumpResp, err := redis.ReadResp(reader)
+				conn.SetReadDeadline(time.Time{})
 				if err != nil {
 					continue
 				}
@@ -208,8 +224,15 @@ func exportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 				}
 
 				// PTTL
-				conn.Write(redis.RedisCmd{Name: "PTTL", Args: []string{key}}.ToBytes())
-				pttlResp, _ := redis.ReadResp(reader)
+				if _, err = conn.Write(redis.RedisCmd{Name: "PTTL", Args: []string{key}}.ToBytes()); err != nil {
+					continue
+				}
+				conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+				pttlResp, err := redis.ReadResp(reader)
+				conn.SetReadDeadline(time.Time{})
+				if err != nil {
+					continue
+				}
 				ttl := -1
 				if p, ok := pttlResp.(int); ok {
 					ttl = p
@@ -232,7 +255,7 @@ func exportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 			return RedisResultMsg{Error: fmt.Errorf("failed to marshal JSON: %v", err)}
 		}
 
-		err = os.WriteFile(resolvedPath, fileData, 0644)
+		err = os.WriteFile(resolvedPath, fileData, 0600)
 		if err != nil {
 			return RedisResultMsg{Error: fmt.Errorf("failed to write file: %v", err)}
 		}

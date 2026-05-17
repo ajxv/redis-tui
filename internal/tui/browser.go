@@ -43,6 +43,7 @@ type BrowserModel struct {
 
 	Cursor  string
 	Pattern string
+	HasMore bool
 }
 
 func (m BrowserModel) Init() tea.Cmd {
@@ -124,7 +125,7 @@ func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 			}
 
 		case "n":
-			if !m.ViewingFields && m.Cursor != "0" {
+			if !m.ViewingFields && m.HasMore {
 				return m, func() tea.Msg {
 					return LoadMoreKeysMsg{}
 				}
@@ -183,7 +184,11 @@ func (m BrowserModel) View() string {
 		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • ctrl+r: refresh")
 	} else {
 		listView = m.KeyList.View()
-		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • r: rename • n: load more • ctrl+r: refresh")
+		moreHint := ""
+		if m.HasMore {
+			moreHint = " • n: load more"
+		}
+		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • r: rename" + moreHint + " • ctrl+r: refresh")
 	}
 	return listView + "\n" + helpText
 }

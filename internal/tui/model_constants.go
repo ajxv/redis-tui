@@ -57,6 +57,7 @@ const (
 	OpImport
 	OpExportDB
 	OpImportDB
+	OpExpireAfterSet
 )
 
 func (o Op) String() string {
