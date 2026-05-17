@@ -192,6 +192,9 @@ type ClearCopyStatusMsg struct{}
 type RedisConnectionMsg struct {
 	Conn  net.Conn
 	Error error
+	// Fatal indicates a permanent error (wrong password, invalid DB) that
+	// should not be retried. The app transitions to StateOutput with the error.
+	Fatal bool
 }
 
 // A message to tell us the wait time is over

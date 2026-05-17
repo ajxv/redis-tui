@@ -55,7 +55,9 @@ func fetchKeyExportData(conn net.Conn, reader *bufio.Reader, key string) (Export
 		return ExportData{}, err
 	}
 	dumpPayload, ok := dumpResp.(string)
-	if !ok || dumpPayload == "" {
+	// ReadResp returns the literal string "(nil)" for Redis null bulk strings ($-1).
+	// Treat it the same as a missing key rather than exporting corrupt data.
+	if !ok || dumpPayload == "" || dumpPayload == "(nil)" {
 		return ExportData{}, fmt.Errorf("key %q does not exist or has no payload", key)
 	}
 
@@ -151,7 +153,9 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 					"REPLACE",
 				},
 			}
-			conn.Write(cmd.ToBytes())
+			if _, err := conn.Write(cmd.ToBytes()); err != nil {
+				return RedisResultMsg{Error: fmt.Errorf("RESTORE write failed for %q: %w", item.Key, err)}
+			}
 			conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 			resp, err := redis.ReadResp(reader)
 			conn.SetReadDeadline(time.Time{})
@@ -223,7 +227,7 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 			}
 
 			var keys []string
-			if resp, ok := response.([]any); ok {
+			if resp, ok := response.([]any); ok && len(resp) >= 2 {
 				if c, ok := resp[0].(string); ok {
 					cursor = c
 				}

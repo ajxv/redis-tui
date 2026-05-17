@@ -28,6 +28,8 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		}
 
 		m.Output = msg.Error.Error()
+		m.ActiveTTL = ""
+		m.CopyStatus = ""
 		m.CurrentState = StateOutput
 		return m, nil
 	}
@@ -54,6 +56,15 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			m.Browser.FieldsList.SetItems(items)
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
+		} else {
+			// ReadResp returns Redis error strings (e.g. WRONGTYPE) as plain string,
+			// not as Go errors. Without this branch the model is stuck in StateLoading.
+			if s, ok := msg.Result.(string); ok && s != "" {
+				m.Output = s
+			} else {
+				m.Output = "Unexpected response"
+			}
+			m.CurrentState = StateOutput
 		}
 
 	case OpExplore:
@@ -98,6 +109,13 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			m.SelectedOp = OpExploreList
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
+		} else {
+			if s, ok := msg.Result.(string); ok && s != "" {
+				m.Output = s
+			} else {
+				m.Output = "Unexpected response"
+			}
+			m.CurrentState = StateOutput
 		}
 
 	case OpSMembers:
@@ -127,6 +145,15 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			m.SelectedOp = OpExploreSet
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
+		} else {
+			// Covers: Redis error strings (WRONGTYPE), null arrays returned as
+			// "(nil)" string, and malformed SSCAN responses with len != 2.
+			if s, ok := msg.Result.(string); ok && s != "" {
+				m.Output = s
+			} else {
+				m.Output = "Unexpected response"
+			}
+			m.CurrentState = StateOutput
 		}
 
 	case OpZRange:
@@ -159,6 +186,13 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			m.SelectedOp = OpExploreZSet
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
+		} else {
+			if s, ok := msg.Result.(string); ok && s != "" {
+				m.Output = s
+			} else {
+				m.Output = "Unexpected response"
+			}
+			m.CurrentState = StateOutput
 		}
 
 	case OpCheckType:
@@ -312,7 +346,9 @@ func handleStateOutputKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "e":
-		if m.SelectedOp == OpInfo {
+		// Set and ZSet members cannot be edited in-place (SREM+SADD would be needed).
+		// Info output is also read-only.
+		if m.SelectedOp == OpInfo || m.SelectedOp == OpExploreSet || m.SelectedOp == OpExploreZSet {
 			break
 		}
 		m.PreservedTTL = 0
@@ -377,17 +413,13 @@ func handleStateConfirmationKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd)
 		case OpQuit:
 			return m, tea.Quit
 		case OpDel:
-			m.CurrentState = StateLoading
-			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey}}, m.ReadTimeout)
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey}}, m.ReadTimeout))
 		case OpHDel:
-			m.CurrentState = StateLoading
-			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, m.ActiveField}}, m.ReadTimeout)
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, m.ActiveField}}, m.ReadTimeout))
 		case OpLRem:
-			m.CurrentState = StateLoading
-			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, "1", m.ActiveField}}, m.ReadTimeout)
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, "1", m.ActiveField}}, m.ReadTimeout))
 		case OpSRem, OpZRem:
-			m.CurrentState = StateLoading
-			return m, sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, m.ActiveField}}, m.ReadTimeout)
+			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: m.SelectedOp.String(), Args: []string{m.ActiveKey, m.ActiveField}}, m.ReadTimeout))
 		}
 	}
 
@@ -412,6 +444,15 @@ func clipboardErrorHint() string {
 // state on success and scheduling a backoff retry on failure.
 func handleRedisConnection(m Model, msg RedisConnectionMsg) (tea.Model, tea.Cmd) {
 	if msg.Error != nil {
+		if msg.Fatal {
+			// Permanent failure (wrong credentials, invalid DB index) — surface
+			// the error immediately and stop retrying.
+			m.Output = msg.Error.Error()
+			m.ActiveTTL = ""
+			m.CopyStatus = ""
+			m.CurrentState = StateOutput
+			return m, nil
+		}
 		m.ReconnectAttempts++
 		return m, waitForNextConnection(m.ReconnectAttempts)
 	}

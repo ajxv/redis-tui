@@ -1530,3 +1530,240 @@ func TestLoadMoreFields_DispatchesByOp(t *testing.T) {
 		})
 	}
 }
+
+// ============================================================
+// 12. MENU SEARCH
+// ============================================================
+
+// newMenuTestModel returns a model pre-populated with menu items so that the
+// list's filter key is enabled (bubbles disables the filter key on empty lists).
+func newMenuTestModel() tui.Model {
+	m := newTestModel()
+	m.MenuList.SetItems([]list.Item{
+		tui.NewListItem("SET", "Set a key-value pair"),
+		tui.NewListItem("GET", "Get the value of a key"),
+		tui.NewListItem("EXPLORE", "Browse keys and values"),
+		tui.NewListItem("INFO", "View Redis server statistics"),
+	})
+	return m
+}
+
+// TestMenu_TypingLetterActivatesFilter verifies that pressing a printable
+// character while on the main menu activates the list's filter input.
+func TestMenu_TypingLetterActivatesFilter(t *testing.T) {
+	m := newMenuTestModel()
+	m.CurrentState = tui.StateMenu
+
+	m2, _ := send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+
+	// The model must still be on the menu (not dispatched to another state).
+	if m2.CurrentState != tui.StateMenu {
+		t.Errorf("state: want StateMenu, got %v", m2.CurrentState)
+	}
+	// The list must have entered Filtering state.
+	if got := m2.MenuList.FilterState(); got != list.Filtering {
+		t.Errorf("FilterState: want Filtering, got %v", got)
+	}
+}
+
+// TestMenu_EscWhileFilteringCancelsFilter verifies that pressing Esc while
+// the filter is active clears the filter instead of opening the quit dialog.
+func TestMenu_EscWhileFilteringCancelsFilter(t *testing.T) {
+	m := newMenuTestModel()
+	m.CurrentState = tui.StateMenu
+
+	// Activate filter.
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if m.MenuList.FilterState() != list.Filtering {
+		t.Skip("filter did not activate — skipping")
+	}
+
+	// Press Esc — should cancel filter, NOT open quit confirmation.
+	m2, _ := send(m, tea.KeyMsg{Type: tea.KeyEscape})
+
+	if m2.CurrentState == tui.StateConfirmation {
+		t.Error("Esc while filtering should cancel filter, not open quit dialog")
+	}
+	if m2.MenuList.FilterState() == list.Filtering {
+		t.Error("filter should be cleared after Esc")
+	}
+}
+
+// TestMenu_QWhileFilteringIsNotQuit verifies that typing 'q' while filtering
+// is treated as a search character, not a quit trigger.
+func TestMenu_QWhileFilteringIsNotQuit(t *testing.T) {
+	m := newMenuTestModel()
+	m.CurrentState = tui.StateMenu
+
+	// Activate filter first with another key, then type 'q'.
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	m2, _ := send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+
+	if m2.CurrentState == tui.StateConfirmation {
+		t.Error("'q' while filtering should not trigger quit confirmation")
+	}
+}
+
+// ============================================================
+// 13. CONFIRMATION → LOADING (SPINNER RESTART)
+// ============================================================
+
+// TestConfirmation_Yes_Delete_EntersLoading verifies that confirming a delete
+// from the confirmation dialog enters StateLoading (spinner is restarted via
+// switchToLoadingAndExecute, not a bare CurrentState assignment).
+func TestConfirmation_Yes_Delete_EntersLoading(t *testing.T) {
+	ops := []tui.Op{tui.OpDel, tui.OpHDel, tui.OpLRem, tui.OpSRem, tui.OpZRem}
+	for _, op := range ops {
+		t.Run(op.String(), func(t *testing.T) {
+			m := newTestModel()
+			m.SelectedOp = op
+			m.ActiveKey = "k"
+			m.ActiveField = "f"
+			m.StateNavigationHistory = []tui.AppState{tui.StateBrowser}
+			m.CurrentState = tui.StateConfirmation
+
+			m2, cmd := send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+
+			if m2.CurrentState != tui.StateLoading {
+				t.Errorf("state: want StateLoading, got %v", m2.CurrentState)
+			}
+			// switchToLoadingAndExecute batches Spinner.Tick + the Redis cmd;
+			// cmd must be non-nil so the spinner restarts.
+			if cmd == nil {
+				t.Error("expected non-nil cmd (spinner tick + delete cmd)")
+			}
+		})
+	}
+}
+
+// ============================================================
+// 14. BACKMSG INPUT TYPE SYNC
+// ============================================================
+
+// TestBackMsg_InputType_SyncOnPop verifies that when BackMsg pops to an input
+// state, Input.Type is corrected to match the returned state. Without this fix,
+// esc from StateInputValue (ZAdd member) back to StateInputField (ZAdd score)
+// leaves Input.Type as InputValue, causing the score form to submit with the
+// wrong type and fire ZADD with wrong args.
+func TestBackMsg_InputType_SyncOnPop(t *testing.T) {
+	cases := []struct {
+		name        string
+		history     []tui.AppState
+		wantType    tui.InputType
+		selectedOp  tui.Op
+	}{
+		{
+			name:       "pop to StateInputKey",
+			history:    []tui.AppState{tui.StateInputKey},
+			wantType:   tui.InputKey,
+			selectedOp: tui.OpSet,
+		},
+		{
+			name:       "pop to StateInputField (HSet)",
+			history:    []tui.AppState{tui.StateInputField},
+			wantType:   tui.InputField,
+			selectedOp: tui.OpHSet,
+		},
+		{
+			name:       "pop to StateInputField (ZAdd) restores score hint",
+			history:    []tui.AppState{tui.StateInputField},
+			wantType:   tui.InputField,
+			selectedOp: tui.OpZAdd,
+		},
+		{
+			name:       "pop to StateInputFilePath",
+			history:    []tui.AppState{tui.StateInputFilePath},
+			wantType:   tui.InputFilePath,
+			selectedOp: tui.OpExport,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel()
+			m.SelectedOp = tc.selectedOp
+			m.StateNavigationHistory = tc.history
+			// Simulate being in StateInputValue with the wrong Input.Type.
+			m.CurrentState = tui.StateInputValue
+			m.Input.Type = tui.InputValue
+
+			m2, _ := send(m, tui.BackMsg{})
+
+			if m2.Input.Type != tc.wantType {
+				t.Errorf("Input.Type: want %v, got %v", tc.wantType, m2.Input.Type)
+			}
+		})
+	}
+}
+
+// ============================================================
+// 15. UNEXPECTED RESULT TYPES — NO STUCK IN STATELOADING
+// ============================================================
+
+// TestResult_UnexpectedType_NeverStuckInLoading verifies that OpHKeys,
+// OpLRange, OpSMembers, and OpZRange do not leave the model in StateLoading
+// when they receive a non-array result (e.g. a WRONGTYPE Redis error string).
+//
+// Without the else-branch fix, all four handlers silently fall through on a
+// type-assertion miss and return (m, nil) with CurrentState still StateLoading,
+// which is unescapable without ctrl+c.
+func TestResult_UnexpectedType_NeverStuckInLoading(t *testing.T) {
+	cases := []struct {
+		op  tui.Op
+		res any
+	}{
+		// WRONGTYPE error string instead of []any
+		{tui.OpHKeys, "WRONGTYPE Operation against a key holding the wrong kind of value"},
+		{tui.OpLRange, "WRONGTYPE Operation against a key holding the wrong kind of value"},
+		{tui.OpZRange, "WRONGTYPE Operation against a key holding the wrong kind of value"},
+		// SSCAN with WRONGTYPE
+		{tui.OpSMembers, "WRONGTYPE Operation against a key holding the wrong kind of value"},
+		// ReadResp unknown prefix returns ("", nil) — empty string, also not []any
+		{tui.OpHKeys, ""},
+		{tui.OpLRange, ""},
+		{tui.OpSMembers, ""},
+		{tui.OpZRange, ""},
+		// SSCAN malformed: []any with len != 2 — passes []any check but fails len==2
+		{tui.OpSMembers, []any{"cursor-only"}},
+	}
+	for _, tc := range cases {
+		name := tc.op.String()
+		t.Run(name, func(t *testing.T) {
+			m := newTestModel()
+			m.SelectedOp = tc.op
+			m.CurrentState = tui.StateLoading
+
+			m2, _ := send(m, tui.RedisResultMsg{Result: tc.res})
+
+			if m2.CurrentState == tui.StateLoading {
+				t.Errorf("model stuck in StateLoading for op=%v result=%#v", tc.op, tc.res)
+			}
+			if m2.CurrentState != tui.StateOutput {
+				t.Errorf("state: want StateOutput, got %v", m2.CurrentState)
+			}
+		})
+	}
+}
+
+// TestBackMsg_ZAdd_ScoreHintRestoredOnEsc verifies specifically that the ZAdd
+// score-input form shows the correct hint after esc from the member step.
+func TestBackMsg_ZAdd_ScoreHintRestoredOnEsc(t *testing.T) {
+	m := newTestModel()
+	m.SelectedOp = tui.OpZAdd
+	// Simulate being at the member step: history has the score step.
+	m.StateNavigationHistory = []tui.AppState{tui.StateInputField}
+	m.CurrentState = tui.StateInputValue
+	m.Input.Type = tui.InputValue
+	m.Input.Hint = "Input the member:"
+
+	m2, _ := send(m, tui.BackMsg{})
+
+	if m2.CurrentState != tui.StateInputField {
+		t.Errorf("state: want StateInputField, got %v", m2.CurrentState)
+	}
+	if m2.Input.Type != tui.InputField {
+		t.Errorf("Input.Type: want InputField, got %v", m2.Input.Type)
+	}
+	if m2.Input.Hint != "Input the score:" {
+		t.Errorf("Input.Hint: want %q, got %q", "Input the score:", m2.Input.Hint)
+	}
+}

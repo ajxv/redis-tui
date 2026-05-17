@@ -112,6 +112,7 @@ func run() error {
 
 	menuList := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	menuList.Title = "Redis TUI"
+	menuList.FilterInput.Placeholder = "type to search..."
 
 	fieldsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	fieldsList.Title = "Select a field"

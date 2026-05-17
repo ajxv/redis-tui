@@ -73,10 +73,11 @@ func (m *Model) popState() AppState {
 }
 
 func (m Model) switchToLoadingAndExecute(cmd tea.Cmd) (tea.Model, tea.Cmd) {
-	// change to loading state
 	m.CurrentState = StateLoading
-
-	return m, cmd
+	// Re-seed the spinner tick so it animates on every loading entry.
+	// Without this, the tick chain dies after the first time we leave StateLoading,
+	// and the spinner freezes on all subsequent loads.
+	return m, tea.Batch(m.Spinner.Tick, cmd)
 }
 
 func (m Model) Init() tea.Cmd {
@@ -94,6 +95,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case BackMsg:
 		m.CurrentState = m.popState()
+		// Sync Input.Type and Hint with the recovered state.
+		// Without this, esc from a nested input (e.g. ZAdd member → score) leaves
+		// Input.Type pointing at the wrong step, causing the form title to be wrong
+		// and InputCompleteMsg to carry the wrong Type when the user submits.
+		switch m.CurrentState {
+		case StateInputKey:
+			m.Input.Type = InputKey
+			m.Input.Hint = ""
+		case StateInputField:
+			m.Input.Type = InputField
+			if m.SelectedOp == OpZAdd {
+				m.Input.Hint = "Input the score:"
+			} else {
+				m.Input.Hint = ""
+			}
+		case StateInputValue:
+			m.Input.Type = InputValue
+			switch m.SelectedOp {
+			case OpZAdd:
+				m.Input.Hint = "Input the member:"
+			case OpExpirySet:
+				m.Input.Hint = "TTL in seconds (enter 0 to remove expiry / PERSIST):"
+			default:
+				m.Input.Hint = ""
+			}
+		case StateInputFilePath:
+			m.Input.Type = InputFilePath
+			m.Input.Hint = ""
+		default:
+			m.Input.Hint = ""
+		}
 
 	case SelectKeyMsg:
 		m.ActiveKey = msg.Key
@@ -146,6 +178,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pushState(m.CurrentState)
 				m.CurrentState = StateInputField
 				m.Input.Type = InputField
+				if m.SelectedOp == OpZAdd {
+					m.Input.Hint = "Input the score:"
+				} else {
+					m.Input.Hint = ""
+				}
 				// clear previous input
 				m.Input.Input.SetValue("")
 
@@ -187,6 +224,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pushState(m.CurrentState)
 				m.CurrentState = StateInputValue
 				m.Input.Type = InputValue
+				if m.SelectedOp == OpZAdd {
+					m.Input.Hint = "Input the member:"
+				} else {
+					m.Input.Hint = ""
+				}
 				// clear previous input
 				m.Input.Input.SetValue("")
 			}
@@ -286,7 +328,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 
 		case OpExploreList:
-			// Simple output for list items
+			m.Output = m.ActiveField
+			m.CurrentState = StateOutput
+
+		case OpExploreSet, OpExploreZSet:
+			// Set members and ZSet members are their own values; display directly.
+			// The score for ZSet is visible in the list description but not surfaced
+			// here — the user can copy the member name with 'c'.
 			m.Output = m.ActiveField
 			m.CurrentState = StateOutput
 		}
@@ -320,6 +368,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SelectedOp = OpRename
 		m.Input.Input.SetValue(msg.Key)
 		m.Input.Type = InputValue
+		m.Input.Hint = ""
 		m.Input.Input.Focus()
 		m.Input.Input.CursorEnd()
 		m.pushState(m.CurrentState)
@@ -412,44 +461,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch m.CurrentState {
 	case StateMenu:
-		if msg, ok := msg.(tea.KeyMsg); ok {
-			switch msg.String() {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			isFiltering := m.MenuList.FilterState() == list.Filtering
+
+			switch keyMsg.String() {
 			case "enter":
-				selectedItem := m.MenuList.SelectedItem()
-				if selectedItem, ok := selectedItem.(ListItem); ok {
-					m.SelectedOp = ParseOp(selectedItem.title)
+				// While the filter input is active, let the list handle Enter
+				// (it confirms the filter and moves to FilterApplied state).
+				if !isFiltering {
+					selectedItem := m.MenuList.SelectedItem()
+					if selectedItem, ok := selectedItem.(ListItem); ok {
+						m.SelectedOp = ParseOp(selectedItem.title)
 
-					// save state history
-					m.pushState(m.CurrentState)
+						// save state history
+						m.pushState(m.CurrentState)
 
-					switch m.SelectedOp {
-					case OpSet, OpGet, OpHSet, OpHGet, OpDelete, OpRPush, OpLPush, OpSAdd, OpZAdd, OpExport:
-						m.Input.Input.Focus()
-						m.Input.Input.SetValue("") // Clear previous input
-						m.CurrentState = StateInputKey
-						m.Input.Type = InputKey
-					case OpImport, OpExportDB, OpImportDB:
-						m.Input.Input.Focus()
-						m.Input.Input.SetValue("") // Clear previous input
-						m.CurrentState = StateInputFilePath
-						m.Input.Type = InputFilePath
-					case OpExplore:
-						m.Input.Input.Focus()
-						m.Input.Input.SetValue("*") // Default search is everything
-						m.CurrentState = StateInputKey
-						m.Input.Type = InputPattern
-					case OpInfo:
-						cmd := redis.RedisCmd{
-							Name: "INFO",
+						switch m.SelectedOp {
+						case OpSet, OpGet, OpHSet, OpHGet, OpDelete, OpRPush, OpLPush, OpSAdd, OpZAdd, OpExport:
+							m.Input.Input.Focus()
+							m.Input.Input.SetValue("") // Clear previous input
+							m.CurrentState = StateInputKey
+							m.Input.Type = InputKey
+						case OpImport, OpExportDB, OpImportDB:
+							m.Input.Input.Focus()
+							m.Input.Input.SetValue("") // Clear previous input
+							m.CurrentState = StateInputFilePath
+							m.Input.Type = InputFilePath
+						case OpExplore:
+							m.Input.Input.Focus()
+							m.Input.Input.SetValue("*") // Default search is everything
+							m.CurrentState = StateInputKey
+							m.Input.Type = InputPattern
+						case OpInfo:
+							cmd := redis.RedisCmd{
+								Name: "INFO",
+							}
+							return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 						}
-						return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, cmd, m.ReadTimeout))
 					}
 				}
 			case "esc", "q":
-				m.SelectedOp = OpQuit
-				m.pushState(m.CurrentState)
-				m.CurrentState = StateConfirmation
-				return m, nil
+				// While filtering, let the list handle Esc (cancels filter).
+				// Only show the quit dialog when the menu is idle.
+				if !isFiltering {
+					m.SelectedOp = OpQuit
+					m.pushState(m.CurrentState)
+					m.CurrentState = StateConfirmation
+					return m, nil
+				}
+			default:
+				// Any printable character while the filter is not yet active
+				// automatically opens the filter input, then the character is
+				// forwarded so it appears immediately in the search box.
+				if !isFiltering && len(keyMsg.Runes) == 1 {
+					m.MenuList, _ = m.MenuList.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+				}
 			}
 		}
 
@@ -490,8 +556,11 @@ func (m Model) View() string {
 		return m.Input.View()
 	case StateOutput:
 		helpTextStr := "esc: return • e: edit • c: copy • x: ttl"
-		if m.SelectedOp == OpInfo {
+		switch m.SelectedOp {
+		case OpInfo:
 			helpTextStr = "esc: return • c: copy"
+		case OpExploreSet, OpExploreZSet:
+			helpTextStr = "esc: return • c: copy • x: ttl"
 		}
 		helpText := helpTextStyle.Render(helpTextStr)
 		ttlText := ""

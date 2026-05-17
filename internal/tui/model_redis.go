@@ -69,7 +69,9 @@ func connectToRedis(m Model) tea.Cmd {
 		// 3. AUTH — ACL format (username + password) or legacy (password only)
 		if err := sendAuth(conn, reader, m.Username, m.Password); err != nil {
 			conn.Close()
-			return RedisConnectionMsg{Error: err}
+			// Auth rejection is a permanent failure — wrong credentials won't fix
+			// themselves on retry, so mark it fatal to stop the backoff loop.
+			return RedisConnectionMsg{Error: err, Fatal: true}
 		}
 
 		// 4. SELECT database
@@ -82,10 +84,19 @@ func connectToRedis(m Model) tea.Cmd {
 			conn.Close()
 			return RedisConnectionMsg{Error: err}
 		}
-		_, err = redis.ReadResp(reader)
+		resp, err := redis.ReadResp(reader)
 		if err != nil {
 			conn.Close()
 			return RedisConnectionMsg{Error: err}
+		}
+		// ReadResp returns the trimmed string for both +OK and -ERR responses;
+		// only a Go error is returned for I/O failures, not Redis-level errors.
+		if str, ok := resp.(string); ok && str != "OK" {
+			conn.Close()
+			return RedisConnectionMsg{
+				Error: fmt.Errorf("SELECT %d failed: %s", m.DB, str),
+				Fatal: true,
+			}
 		}
 
 		return RedisConnectionMsg{Conn: conn}
@@ -120,6 +131,10 @@ func sendAuth(conn net.Conn, reader *bufio.Reader, username, password string) er
 
 func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor string) tea.Cmd {
 	return func() tea.Msg {
+		if conn == nil {
+			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
+		}
+
 		filter := pattern
 		var keys []list.Item
 
@@ -139,7 +154,7 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 				Error: err,
 			}
 		}
-		if resp, ok := response.([]any); ok {
+		if resp, ok := response.([]any); ok && len(resp) >= 2 {
 			if c, ok := resp[0].(string); ok {
 				cursor = c
 			}

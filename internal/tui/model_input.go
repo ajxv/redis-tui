@@ -68,7 +68,11 @@ func (m InputModel) View() string {
 			title = "Input the Value:"
 		}
 	case InputField:
-		title = "Input the Field:"
+		if m.Hint != "" {
+			title = m.Hint
+		} else {
+			title = "Input the Field:"
+		}
 	case InputPattern:
 		title = "Input the search pattern:"
 	case InputFilePath:
