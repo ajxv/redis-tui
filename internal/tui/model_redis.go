@@ -215,6 +215,7 @@ func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd, readT
 		response, err := redis.ReadResp(reader)
 		conn.SetReadDeadline(time.Time{})
 		if err != nil {
+			conn.Close() // stream is desynced; closing forces a net.Error on the next Write, triggering reconnect
 			return RedisResultMsg{Error: err}
 		}
 

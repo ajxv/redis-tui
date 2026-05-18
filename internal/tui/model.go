@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -23,7 +22,6 @@ type Model struct {
 	MenuList               list.Model
 	Input                  InputModel
 	Output                 string
-	ViewPort               viewport.Model
 	ActiveKey              string
 	ActiveField            string
 	ActiveIndex            int
@@ -387,9 +385,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.Browser.KeyList.SetHeight(msg.Height)
 		m.Browser.KeyList.SetWidth(msg.Width)
-
-		m.ViewPort.Width = msg.Width
-		m.ViewPort.Height = msg.Height
 
 	case TickMsg:
 		return m, connectToRedis(m)

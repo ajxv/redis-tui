@@ -1647,10 +1647,10 @@ func TestConfirmation_Yes_Delete_EntersLoading(t *testing.T) {
 // wrong type and fire ZADD with wrong args.
 func TestBackMsg_InputType_SyncOnPop(t *testing.T) {
 	cases := []struct {
-		name        string
-		history     []tui.AppState
-		wantType    tui.InputType
-		selectedOp  tui.Op
+		name       string
+		history    []tui.AppState
+		wantType   tui.InputType
+		selectedOp tui.Op
 	}{
 		{
 			name:       "pop to StateInputKey",

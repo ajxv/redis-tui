@@ -123,7 +123,7 @@ func ReadResp(reader *bufio.Reader) (any, error) {
 
 		return num, nil // Clean up the result
 
+	default:
+		return "", fmt.Errorf("unknown RESP prefix byte: %q", prefix)
 	}
-
-	return "", nil
 }

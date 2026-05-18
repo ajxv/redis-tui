@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ajxv/redis-tui/internal/tui"
@@ -73,6 +72,15 @@ func run() error {
 		return err
 	}
 
+	// Go's tls.Client requires either ServerName or InsecureSkipVerify.
+	// Derive ServerName from the host address so certificate hostname
+	// validation works out of the box without the user having to specify it.
+	if tlsCfg != nil && !tlsCfg.InsecureSkipVerify && tlsCfg.ServerName == "" {
+		if hostname, _, herr := net.SplitHostPort(*host); herr == nil && hostname != "" {
+			tlsCfg.ServerName = hostname
+		}
+	}
+
 	// Fail-fast connectivity pre-check
 	rawConn, err := net.DialTimeout("tcp", *host, *dialTimeout)
 	if err != nil {
@@ -121,7 +129,6 @@ func run() error {
 	keyList.Title = "Select a key"
 
 	input := textinput.New()
-	vp := viewport.New(0, 0)
 
 	initialModel := tui.Model{
 		CurrentState: tui.StateMenu,
@@ -135,7 +142,6 @@ func run() error {
 		Input: tui.InputModel{
 			Input: input,
 		},
-		ViewPort:     vp,
 		RedisAddress: *host,
 		Password:     *password,
 		Username:     *username,

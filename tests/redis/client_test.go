@@ -70,6 +70,18 @@ func TestReadResp(t *testing.T) {
 	}
 }
 
+// TestReadResp_UnknownPrefix verifies that an unrecognised RESP prefix byte
+// returns an error rather than silently consuming 1 byte and returning "".
+// Returning "" would desync the bufio.Reader for all subsequent reads.
+func TestReadResp_UnknownPrefix(t *testing.T) {
+	// '!' is not a valid RESP2 prefix byte.
+	reader := bufio.NewReader(strings.NewReader("!5\r\nhello\r\n"))
+	_, err := redis.ReadResp(reader)
+	if err == nil {
+		t.Fatal("expected error for unknown RESP prefix, got nil")
+	}
+}
+
 func TestReadResp_ArrayCommand(t *testing.T) {
 	input := "*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$5\r\nmyval\r\n"
 	reader := bufio.NewReader(bytes.NewReader([]byte(input)))

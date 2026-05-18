@@ -460,6 +460,9 @@ func handleRedisConnection(m Model, msg RedisConnectionMsg) (tea.Model, tea.Cmd)
 	conn := msg.Conn
 	reader := bufio.NewReader(conn)
 	m.Reader = reader
+	if m.Conn != nil {
+		m.Conn.Close() // close the stale fd before overwriting; safe on a broken connection
+	}
 	m.Conn = conn
 	m.ReconnectAttempts = 0
 
