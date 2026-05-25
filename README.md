@@ -46,13 +46,39 @@ All other features work on Linux without additional dependencies.
 
 ## Installation
 
-### Option 1: Using Go Install
+### Option 1: `curl | sh` Installer (No Go Required)
+
+Install the latest release to `~/.local/bin` (or `/usr/local/bin` if `~/.local/bin` is not writable):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ajxv/redis-tui/main/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ajxv/redis-tui/main/install.sh | sh -s -- --version v1.0.0-beta
+```
+
+System-wide install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ajxv/redis-tui/main/install.sh | sudo sh -s -- --to /usr/local/bin
+```
+
+Required tools:
+
+- `curl` or `wget`
+- `tar`
+- Optional checksum verification: `sha256sum` or `shasum`
+
+### Option 2: Using Go Install
 
 ```bash
 go install github.com/ajxv/redis-tui/cmd/redis-tui@latest
 ```
 
-### Option 2: Pre-compiled Binaries (Recommended)
+### Option 3: Pre-compiled Binaries
 
 Download the latest binary for your OS from the [Releases page](https://github.com/ajxv/redis-tui/releases). Extract and place the `redis-tui` binary in your `PATH`.
 
