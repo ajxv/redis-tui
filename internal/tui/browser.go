@@ -1,9 +1,6 @@
 package tui
 
 import (
-	"bufio"
-	"net"
-
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -44,11 +41,14 @@ type BrowserModel struct {
 	// Helper to track which list we are looking at
 	ViewingFields bool
 
-	Conn   net.Conn
-	Reader *bufio.Reader
-
 	Cursor  string
 	Pattern string
+	HasMore bool
+
+	// Field-level pagination (lists, sets, sorted sets)
+	FieldCursor   string // SSCAN cursor for set pages; "" = first page
+	FieldOffset   int    // item offset for list/zset pages
+	HasMoreFields bool   // shows "n: load more" hint in field view
 }
 
 func (m BrowserModel) Init() tea.Cmd {
@@ -76,12 +76,25 @@ type DeleteRequestMsg struct {
 
 type LoadMoreKeysMsg struct{}
 
+type LoadMoreFieldsMsg struct{}
+
+type RenameRequestMsg struct {
+	Key string
+}
+
+type RefreshMsg struct{}
+
 func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "ctrl+r", "f5":
+			return m, func() tea.Msg {
+				return RefreshMsg{}
+			}
+
 		case "esc":
 			if m.ViewingFields {
 				m.ViewingFields = false
@@ -118,7 +131,12 @@ func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 			}
 
 		case "n":
-			if !m.ViewingFields && m.Cursor != "0" {
+			if m.ViewingFields && m.HasMoreFields {
+				return m, func() tea.Msg {
+					return LoadMoreFieldsMsg{}
+				}
+			}
+			if !m.ViewingFields && m.HasMore {
 				return m, func() tea.Msg {
 					return LoadMoreKeysMsg{}
 				}
@@ -133,13 +151,24 @@ func (m BrowserModel) Update(msg tea.Msg) (BrowserModel, tea.Cmd) {
 							Key:   m.ActiveKey,
 							Field: item.Title(),
 						}
-
 					}
 				}
 			} else {
 				if item, ok := m.KeyList.SelectedItem().(ListItem); ok {
 					return m, func() tea.Msg {
 						return DeleteRequestMsg{
+							Key: item.Title(),
+						}
+					}
+				}
+			}
+
+		case "r":
+			// only allow rename from the key list (not field list)
+			if !m.ViewingFields {
+				if item, ok := m.KeyList.SelectedItem().(ListItem); ok {
+					return m, func() tea.Msg {
+						return RenameRequestMsg{
 							Key: item.Title(),
 						}
 					}
@@ -163,10 +192,18 @@ func (m BrowserModel) View() string {
 
 	if m.ViewingFields {
 		listView = m.FieldsList.View()
-		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete")
+		fieldMoreHint := ""
+		if m.HasMoreFields {
+			fieldMoreHint = " • n: load more"
+		}
+		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • ctrl+r: refresh" + fieldMoreHint)
 	} else {
 		listView = m.KeyList.View()
-		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • n: load more")
+		moreHint := ""
+		if m.HasMore {
+			moreHint = " • n: load more"
+		}
+		helpText = helpTextStyle.Render("esc: return • enter: select • d: delete • r: rename" + moreHint + " • ctrl+r: refresh")
 	}
 	return listView + "\n" + helpText
 }

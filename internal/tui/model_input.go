@@ -12,9 +12,8 @@ const (
 	InputKey
 	InputField
 	InputValue
-	InputScore
-	InputMember
 	InputPattern
+	InputFilePath
 )
 
 type InputCompleteMsg struct {
@@ -25,6 +24,7 @@ type InputCompleteMsg struct {
 type InputModel struct {
 	Input textinput.Model
 	Type  InputType
+	Hint  string // optional override for the prompt label
 }
 
 func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
@@ -62,15 +62,21 @@ func (m InputModel) View() string {
 	case InputKey:
 		title = "Input the key:"
 	case InputValue:
-		title = "Input the Value:"
+		if m.Hint != "" {
+			title = m.Hint
+		} else {
+			title = "Input the Value:"
+		}
 	case InputField:
-		title = "Input the Field:"
-	case InputScore:
-		title = "Input the Score:"
-	case InputMember:
-		title = "Input the Member:"
+		if m.Hint != "" {
+			title = m.Hint
+		} else {
+			title = "Input the Field:"
+		}
 	case InputPattern:
 		title = "Input the search pattern:"
+	case InputFilePath:
+		title = "Input the destination/source file path:"
 	default:
 		return ""
 	}

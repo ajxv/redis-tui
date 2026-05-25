@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strconv"
@@ -12,74 +13,128 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// A command that waits for 2 seconds, then returns the TickMsg
-func waitForNextConnection() tea.Cmd {
-	return func() tea.Msg {
-		time.Sleep(2 * time.Second)
+const defaultDialTimeout = 5 * time.Second
+const defaultReadTimeout = 10 * time.Second
 
+// BackoffDuration returns an exponentially increasing wait time capped at 30s.
+// Attempt is clamped to 7 to prevent integer overflow (1<<7 * 200ms = 25.6s).
+func BackoffDuration(attempt int) time.Duration {
+	const maxWait = 30 * time.Second
+	if attempt > 7 {
+		attempt = 7
+	}
+	d := time.Duration(1<<attempt) * 200 * time.Millisecond
+	if d > maxWait {
+		d = maxWait
+	}
+	return d
+}
+
+// waitForNextConnection waits the backoff duration then signals a reconnect.
+func waitForNextConnection(attempt int) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(BackoffDuration(attempt))
 		return TickMsg{}
 	}
 }
 
-func connectToRedis(address string, password string, db int) tea.Cmd {
+// connectToRedis dials Redis using the connection settings stored in m,
+// performs TLS wrapping when configured, authenticates, and selects the DB.
+func connectToRedis(m Model) tea.Cmd {
 	return func() tea.Msg {
-		// dial the address
-		conn, err := net.Dial("tcp", address)
+		dialTimeout := m.DialTimeout
+		if dialTimeout == 0 {
+			dialTimeout = defaultDialTimeout
+		}
+
+		// 1. Dial raw TCP
+		rawConn, err := net.DialTimeout("tcp", m.RedisAddress, dialTimeout)
 		if err != nil {
-			return RedisConnectionMsg{
-				Error: err,
+			return RedisConnectionMsg{Error: err}
+		}
+
+		// 2. Wrap with TLS when configured
+		conn := rawConn
+		if m.TLSConfig != nil {
+			tlsConn := tls.Client(rawConn, m.TLSConfig)
+			if err := tlsConn.Handshake(); err != nil {
+				_ = rawConn.Close()
+				return RedisConnectionMsg{Error: fmt.Errorf("TLS handshake failed: %w", err)}
 			}
+			conn = tlsConn
 		}
 
 		reader := bufio.NewReader(conn)
 
-		if password != "" {
-			cmd := redis.RedisCmd{
-				Name: "AUTH",
-				Args: []string{password},
-			}
-
-			_, err = conn.Write(cmd.ToBytes())
-			if err != nil {
-				return RedisConnectionMsg{
-					Error: err,
-				}
-			}
-			_, err = redis.ReadResp(reader)
-			if err != nil {
-				return RedisConnectionMsg{
-					Error: err,
-				}
-			}
+		// 3. AUTH — ACL format (username + password) or legacy (password only)
+		if err := sendAuth(conn, reader, m.Username, m.Password); err != nil {
+			_ = conn.Close()
+			// Auth rejection is a permanent failure — wrong credentials won't fix
+			// themselves on retry, so mark it fatal to stop the backoff loop.
+			return RedisConnectionMsg{Error: err, Fatal: true}
 		}
 
-		// select db
+		// 4. SELECT database
 		cmd := redis.RedisCmd{
 			Name: "SELECT",
-			Args: []string{strconv.Itoa(db)},
+			Args: []string{strconv.Itoa(m.DB)},
 		}
-
 		_, err = conn.Write(cmd.ToBytes())
 		if err != nil {
-			return RedisConnectionMsg{
-				Error: err,
-			}
+			_ = conn.Close()
+			return RedisConnectionMsg{Error: err}
 		}
-		_, err = redis.ReadResp(reader)
+		resp, err := redis.ReadResp(reader)
 		if err != nil {
+			_ = conn.Close()
+			return RedisConnectionMsg{Error: err}
+		}
+		// ReadResp returns the trimmed string for both +OK and -ERR responses;
+		// only a Go error is returned for I/O failures, not Redis-level errors.
+		if str, ok := resp.(string); ok && str != "OK" {
+			_ = conn.Close()
 			return RedisConnectionMsg{
-				Error: err,
+				Error: fmt.Errorf("SELECT %d failed: %s", m.DB, str),
+				Fatal: true,
 			}
 		}
 
-		return RedisConnectionMsg{
-			Conn: conn,
-		}
+		return RedisConnectionMsg{Conn: conn}
 	}
+}
+
+// sendAuth sends the appropriate AUTH command based on whether a username is
+// provided. Sends nothing when both username and password are empty.
+func sendAuth(conn net.Conn, reader *bufio.Reader, username, password string) error {
+	var cmd redis.RedisCmd
+	if username != "" && password != "" {
+		cmd = redis.RedisCmd{Name: "AUTH", Args: []string{username, password}}
+	} else if password != "" {
+		cmd = redis.RedisCmd{Name: "AUTH", Args: []string{password}}
+	} else {
+		return nil
+	}
+
+	if _, err := conn.Write(cmd.ToBytes()); err != nil {
+		return fmt.Errorf("AUTH write failed: %w", err)
+	}
+	resp, err := redis.ReadResp(reader)
+	if err != nil {
+		return fmt.Errorf("AUTH read failed: %w", err)
+	}
+	// ReadResp returns plain strings for both +OK and -ERR... responses.
+	if str, ok := resp.(string); ok && str != "OK" {
+		return fmt.Errorf("AUTH rejected: %s", str)
+	}
+	return nil
 }
 
 func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor string) tea.Cmd {
 	return func() tea.Msg {
+		if conn == nil {
+			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
+		}
+
 		filter := pattern
 		var keys []list.Item
 
@@ -99,7 +154,7 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 				Error: err,
 			}
 		}
-		if resp, ok := response.([]any); ok {
+		if resp, ok := response.([]any); ok && len(resp) >= 2 {
 			if c, ok := resp[0].(string); ok {
 				cursor = c
 			}
@@ -116,10 +171,12 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 					// Pipeline TYPE commands
 					for _, k := range rawKeys {
 						cmd := redis.RedisCmd{Name: "TYPE", Args: []string{k}}
-						conn.Write(cmd.ToBytes())
+						if _, err := conn.Write(cmd.ToBytes()); err != nil {
+							return RedisResultMsg{Error: err}
+						}
 					}
 
-					// Read piplined responses
+					// Read pipelined responses
 					for _, k := range rawKeys {
 						desc := "key"
 						typeResp, err := redis.ReadResp(reader)
@@ -140,32 +197,57 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 	}
 }
 
-func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd) tea.Cmd {
+func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd, readTimeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		// SAFETY CHECK: If there is no connection, return an error immediately
 		if conn == nil {
 			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
 		}
 
-		// 1. Send the command to Redis (conn.Write)
-		// 2. Read the response (redis.ReadResp)
-		// 3. Return a RedisResultMsg
+		if readTimeout == 0 {
+			readTimeout = defaultReadTimeout
+		}
 
 		_, err := conn.Write(cmd.ToBytes())
 		if err != nil {
-			return RedisResultMsg{
-				Error: err,
-			}
+			return RedisResultMsg{Error: err}
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 		response, err := redis.ReadResp(reader)
+		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
-			return RedisResultMsg{
-				Error: err,
-			}
+			_ = conn.Close() // stream is desynced; closing forces a net.Error on the next Write, triggering reconnect
+			return RedisResultMsg{Error: err}
 		}
 
-		return RedisResultMsg{
-			Result: response,
+		return RedisResultMsg{Result: response}
+	}
+}
+
+func fetchTTL(conn net.Conn, reader *bufio.Reader, key string, readTimeout time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		if conn == nil {
+			return RedisTTLResultMsg{TTL: -2}
 		}
+		if readTimeout == 0 {
+			readTimeout = defaultReadTimeout
+		}
+		cmd := redis.RedisCmd{
+			Name: "TTL",
+			Args: []string{key},
+		}
+		_, err := conn.Write(cmd.ToBytes())
+		if err != nil {
+			return RedisTTLResultMsg{TTL: -2}
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+		response, err := redis.ReadResp(reader)
+		_ = conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			return RedisTTLResultMsg{TTL: -2}
+		}
+		if ttl, ok := response.(int); ok {
+			return RedisTTLResultMsg{TTL: ttl}
+		}
+		return RedisTTLResultMsg{TTL: -2}
 	}
 }
