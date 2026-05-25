@@ -48,9 +48,9 @@ func fetchKeyExportData(conn net.Conn, reader *bufio.Reader, key string) (Export
 	if _, err := conn.Write(redis.RedisCmd{Name: "DUMP", Args: []string{key}}.ToBytes()); err != nil {
 		return ExportData{}, fmt.Errorf("DUMP write failed for %q: %w", key, err)
 	}
-	conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 	dumpResp, err := redis.ReadResp(reader)
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		return ExportData{}, err
 	}
@@ -64,9 +64,9 @@ func fetchKeyExportData(conn net.Conn, reader *bufio.Reader, key string) (Export
 	if _, err := conn.Write(redis.RedisCmd{Name: "PTTL", Args: []string{key}}.ToBytes()); err != nil {
 		return ExportData{}, fmt.Errorf("PTTL write failed for %q: %w", key, err)
 	}
-	conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 	pttlResp, err := redis.ReadResp(reader)
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		return ExportData{}, fmt.Errorf("PTTL failed for %q: %w", key, err)
 	}
@@ -156,9 +156,9 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 			if _, err := conn.Write(cmd.ToBytes()); err != nil {
 				return RedisResultMsg{Error: fmt.Errorf("RESTORE write failed for %q: %w", item.Key, err)}
 			}
-			conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+			_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 			resp, err := redis.ReadResp(reader)
-			conn.SetReadDeadline(time.Time{})
+			_ = conn.SetReadDeadline(time.Time{})
 			if err == nil {
 				if strResp, ok := resp.(string); ok && strResp == "OK" {
 					importedCount++
@@ -199,8 +199,8 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 		success := false
 		defer func() {
 			if !success {
-				f.Close()
-				os.Remove(tmpPath)
+				_ = f.Close()
+				_ = os.Remove(tmpPath)
 			}
 		}()
 
@@ -219,9 +219,9 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 			if _, err := conn.Write(redis.RedisCmd{Name: "SCAN", Args: []string{cursor}}.ToBytes()); err != nil {
 				return RedisResultMsg{Error: err}
 			}
-			conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+			_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
 			response, err := redis.ReadResp(reader)
-			conn.SetReadDeadline(time.Time{})
+			_ = conn.SetReadDeadline(time.Time{})
 			if err != nil {
 				return RedisResultMsg{Error: err}
 			}
@@ -269,9 +269,9 @@ func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd 
 
 		// Close before rename so Windows can move the file (open handles block
 		// os.Rename on Windows). On Linux/macOS this is a no-op in terms of safety.
-		f.Close()
+		_ = f.Close()
 		if err := os.Rename(tmpPath, resolvedPath); err != nil {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 			return RedisResultMsg{Error: fmt.Errorf("failed to finalise export: %v", err)}
 		}
 		success = true

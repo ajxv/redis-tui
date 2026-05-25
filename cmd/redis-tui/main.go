@@ -90,13 +90,13 @@ func run() error {
 	if tlsCfg != nil {
 		tc := tls.Client(rawConn, tlsCfg)
 		if err := tc.Handshake(); err != nil {
-			rawConn.Close()
+			_ = rawConn.Close()
 			fmt.Printf("TLS handshake error: %v\n", err)
 			return err
 		}
-		tc.Close() // closes the TLS layer and the underlying rawConn
+		_ = tc.Close() // closes the TLS layer and the underlying rawConn
 	} else {
-		rawConn.Close()
+		_ = rawConn.Close()
 	}
 
 	// Build menu items

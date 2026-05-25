@@ -54,11 +54,11 @@ func connectToRedis(m Model) tea.Cmd {
 		}
 
 		// 2. Wrap with TLS when configured
-		var conn net.Conn = rawConn
+		conn := rawConn
 		if m.TLSConfig != nil {
 			tlsConn := tls.Client(rawConn, m.TLSConfig)
 			if err := tlsConn.Handshake(); err != nil {
-				rawConn.Close()
+				_ = rawConn.Close()
 				return RedisConnectionMsg{Error: fmt.Errorf("TLS handshake failed: %w", err)}
 			}
 			conn = tlsConn
@@ -68,7 +68,7 @@ func connectToRedis(m Model) tea.Cmd {
 
 		// 3. AUTH — ACL format (username + password) or legacy (password only)
 		if err := sendAuth(conn, reader, m.Username, m.Password); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			// Auth rejection is a permanent failure — wrong credentials won't fix
 			// themselves on retry, so mark it fatal to stop the backoff loop.
 			return RedisConnectionMsg{Error: err, Fatal: true}
@@ -81,18 +81,18 @@ func connectToRedis(m Model) tea.Cmd {
 		}
 		_, err = conn.Write(cmd.ToBytes())
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return RedisConnectionMsg{Error: err}
 		}
 		resp, err := redis.ReadResp(reader)
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return RedisConnectionMsg{Error: err}
 		}
 		// ReadResp returns the trimmed string for both +OK and -ERR responses;
 		// only a Go error is returned for I/O failures, not Redis-level errors.
 		if str, ok := resp.(string); ok && str != "OK" {
-			conn.Close()
+			_ = conn.Close()
 			return RedisConnectionMsg{
 				Error: fmt.Errorf("SELECT %d failed: %s", m.DB, str),
 				Fatal: true,
@@ -211,11 +211,11 @@ func sendRedisCmd(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd, readT
 		if err != nil {
 			return RedisResultMsg{Error: err}
 		}
-		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 		response, err := redis.ReadResp(reader)
-		conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
-			conn.Close() // stream is desynced; closing forces a net.Error on the next Write, triggering reconnect
+			_ = conn.Close() // stream is desynced; closing forces a net.Error on the next Write, triggering reconnect
 			return RedisResultMsg{Error: err}
 		}
 
@@ -239,9 +239,9 @@ func fetchTTL(conn net.Conn, reader *bufio.Reader, key string, readTimeout time.
 		if err != nil {
 			return RedisTTLResultMsg{TTL: -2}
 		}
-		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 		response, err := redis.ReadResp(reader)
-		conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			return RedisTTLResultMsg{TTL: -2}
 		}

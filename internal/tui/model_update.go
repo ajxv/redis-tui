@@ -73,9 +73,7 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 				m.Browser.KeyList.SetItems(result.Keys)
 			} else {
 				items := m.Browser.KeyList.Items()
-				for _, k := range result.Keys {
-					items = append(items, k)
-				}
+				items = append(items, result.Keys...)
 				m.Browser.KeyList.SetItems(items)
 			}
 			m.Browser.Cursor = result.Cursor
@@ -461,7 +459,7 @@ func handleRedisConnection(m Model, msg RedisConnectionMsg) (tea.Model, tea.Cmd)
 	reader := bufio.NewReader(conn)
 	m.Reader = reader
 	if m.Conn != nil {
-		m.Conn.Close() // close the stale fd before overwriting; safe on a broken connection
+		_ = m.Conn.Close() // close the stale fd before overwriting; safe on a broken connection
 	}
 	m.Conn = conn
 	m.ReconnectAttempts = 0

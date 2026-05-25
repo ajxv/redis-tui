@@ -21,8 +21,10 @@ func writeTempJSON(t *testing.T, data []tui.ExportData) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	f.Write(fileData)
+	defer func() { _ = f.Close() }()
+	if _, err = f.Write(fileData); err != nil {
+		t.Fatal(err)
+	}
 	return f.Name()
 }
 
@@ -31,7 +33,7 @@ func writeTempJSON(t *testing.T, data []tui.ExportData) string {
 func TestImportKeys_OKResponse(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("hello"))
 	path := writeTempJSON(t, []tui.ExportData{{Key: "mykey", TTL: -1, Value: encoded}})
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	conn, reader := newMockConn("+OK\r\n")
 
@@ -53,7 +55,7 @@ func TestImportKeys_OKResponse(t *testing.T) {
 func TestImportKeys_NonOKResponse(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("hello"))
 	path := writeTempJSON(t, []tui.ExportData{{Key: "mykey", TTL: -1, Value: encoded}})
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 
 	conn, reader := newMockConn("-ERR BUSYKEY Target key name already exists.\r\n")
 
