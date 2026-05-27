@@ -10,7 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ajxv/redis-tui/internal/tui"
@@ -128,7 +128,9 @@ func run() error {
 	keyList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	keyList.Title = "Select a key"
 
-	input := textinput.New()
+	input := textarea.New()
+	input.ShowLineNumbers = false
+	input.Prompt = ""
 
 	initialModel := tui.Model{
 		CurrentState: tui.StateMenu,

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1-beta] - 2026-05-27
+
+### Fixed
+- Output screen now word-wraps large values (JSON, Redis `INFO`, errors) to the terminal width instead of overflowing.
+- Confirmation dialogs (delete key/field) now wrap long key and field names within the dialog box boundary.
+- Edit mode (`e` key) now uses a full multi-line textarea that word-wraps large values to the terminal width instead of a single scrolling line.
+
 ## [1.0.0-beta] - 2026-05-17
 
 ### Added
@@ -36,4 +43,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Export / Import keys and entire databases via JSON (`DUMP`/`RESTORE`).
 - Exponential backoff reconnection (200 ms → 25.6 s cap) on connection loss.
 
+[1.0.1-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.0.1-beta
 [1.0.0-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.0.0-beta

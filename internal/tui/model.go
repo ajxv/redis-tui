@@ -11,7 +11,7 @@ import (
 	"github.com/ajxv/redis-tui/internal/redis"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -79,7 +79,7 @@ func (m Model) switchToLoadingAndExecute(cmd tea.Cmd) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.Spinner.Tick, connectToRedis(m), textinput.Blink)
+	return tea.Batch(m.Spinner.Tick, connectToRedis(m), textarea.Blink)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -375,6 +375,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.WindowWidth = msg.Width
 		m.WindowHeight = msg.Height
+		m.Input.Width = msg.Width
+		m.Input.Height = msg.Height
 
 		// handle resizing events
 		m.MenuList.SetWidth(msg.Width)

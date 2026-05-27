@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -22,9 +22,11 @@ type InputCompleteMsg struct {
 }
 
 type InputModel struct {
-	Input textinput.Model
-	Type  InputType
-	Hint  string // optional override for the prompt label
+	Input  textarea.Model
+	Type   InputType
+	Hint   string // optional override for the prompt label
+	Width  int
+	Height int
 }
 
 func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
@@ -48,7 +50,7 @@ func (m InputModel) Update(msg tea.Msg) (InputModel, tea.Cmd) {
 		}
 	}
 
-	// pass eveything else to text input handler
+	// pass eveything else to textarea handler
 	m.Input, cmd = m.Input.Update(msg)
 
 	return m, cmd
@@ -81,7 +83,21 @@ func (m InputModel) View() string {
 		return ""
 	}
 
-	// Return the title + newline + the text input view
+	// Size the textarea to available window space.
+	// Reserve lines for the title, a blank separator, help text, and margin.
+	const reservedLines = 5
+	h := 3 // sensible default before first WindowSizeMsg
+	if m.Height > reservedLines && m.Type == InputValue {
+		h = m.Height - reservedLines
+	}
+	w := 78 // fallback before first WindowSizeMsg
+	if m.Width > 2 {
+		w = m.Width - 2
+	}
+	m.Input.SetWidth(w)
+	m.Input.SetHeight(h)
+
+	// Return the title + newline + the textarea view
 	helpText := helpTextStyle.Render("esc: return • enter: submit")
 	return title + "\n" + m.Input.View() + "\n\n" + helpText
 }
