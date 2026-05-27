@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Output screen now word-wraps large values (JSON, Redis `INFO`, errors) to the terminal width instead of overflowing.
 - Confirmation dialogs (delete key/field) now wrap long key and field names within the dialog box boundary.
 - Edit mode (`e` key) now uses a full multi-line textarea that word-wraps large values to the terminal width instead of a single scrolling line.
+- Pressing `esc` after a successful edit (`e`) or TTL change (`x`) now correctly returns to the browser instead of showing a blank output screen.
 
 ## [1.0.0-beta] - 2026-05-17
 

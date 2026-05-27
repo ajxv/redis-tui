@@ -331,6 +331,14 @@ func handleStateOutputKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// A StateOutput entry in the history is left by the 'e' (edit) or 'x'
+		// (TTL change) key. After the operation the result is shown in StateOutput,
+		// so popping would loop back to a blank output screen.
+		// Pop one more level to surface the real ancestor state (e.g. StateBrowser).
+		if previousState == StateOutput {
+			previousState = m.popState()
+		}
+
 		m.CurrentState = previousState
 
 		// Reset Op mode so 'Enter' works correctly when returning to the list.
