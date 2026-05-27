@@ -566,7 +566,12 @@ func (m Model) View() string {
 		if m.CopyStatus != "" {
 			copyText = "\n\n" + statusTextStyle.Render(m.CopyStatus)
 		}
-		return "\nOutput: " + statusTextStyle.Render(m.Output) + ttlText + copyText + "\n\n" + helpText
+		contentWidth := m.WindowWidth - 2
+		if contentWidth <= 0 {
+			contentWidth = 78
+		}
+		outputContent := statusTextStyle.Width(contentWidth).Render(m.Output)
+		return "\nOutput:\n" + outputContent + ttlText + copyText + "\n\n" + helpText
 	case StateBrowser:
 		return m.Browser.View()
 	case StateLoading:
@@ -593,7 +598,11 @@ func (m Model) View() string {
 			msg = "Are you sure you want to perform this action:\n" + m.SelectedOp.String()
 		}
 		prompt := fmt.Sprintf("\n%s\n\n[y] Confirm   [n / esc] Cancel\n", msg)
-		styledPrompt := warningStyle.Render(prompt)
+		dialogWidth := m.WindowWidth - 8
+		if dialogWidth <= 0 {
+			dialogWidth = 60
+		}
+		styledPrompt := warningStyle.Width(dialogWidth).Render(prompt)
 		return lipgloss.Place(m.WindowWidth, m.WindowHeight, lipgloss.Center, lipgloss.Center, styledPrompt)
 	default:
 		return ""
