@@ -11,7 +11,7 @@ import (
 	"github.com/ajxv/redis-tui/internal/redis"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -79,7 +79,7 @@ func (m Model) switchToLoadingAndExecute(cmd tea.Cmd) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.Spinner.Tick, connectToRedis(m), textinput.Blink)
+	return tea.Batch(m.Spinner.Tick, connectToRedis(m), textarea.Blink)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -375,6 +375,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.WindowWidth = msg.Width
 		m.WindowHeight = msg.Height
+		m.Input.Width = msg.Width
+		m.Input.Height = msg.Height
 
 		// handle resizing events
 		m.MenuList.SetWidth(msg.Width)
@@ -566,7 +568,12 @@ func (m Model) View() string {
 		if m.CopyStatus != "" {
 			copyText = "\n\n" + statusTextStyle.Render(m.CopyStatus)
 		}
-		return "\nOutput: " + statusTextStyle.Render(m.Output) + ttlText + copyText + "\n\n" + helpText
+		contentWidth := m.WindowWidth - 2
+		if contentWidth <= 0 {
+			contentWidth = 78
+		}
+		outputContent := statusTextStyle.Width(contentWidth).Render(m.Output)
+		return "\nOutput:\n" + outputContent + ttlText + copyText + "\n\n" + helpText
 	case StateBrowser:
 		return m.Browser.View()
 	case StateLoading:
@@ -593,7 +600,11 @@ func (m Model) View() string {
 			msg = "Are you sure you want to perform this action:\n" + m.SelectedOp.String()
 		}
 		prompt := fmt.Sprintf("\n%s\n\n[y] Confirm   [n / esc] Cancel\n", msg)
-		styledPrompt := warningStyle.Render(prompt)
+		dialogWidth := m.WindowWidth - 8
+		if dialogWidth <= 0 {
+			dialogWidth = 60
+		}
+		styledPrompt := warningStyle.Width(dialogWidth).Render(prompt)
 		return lipgloss.Place(m.WindowWidth, m.WindowHeight, lipgloss.Center, lipgloss.Center, styledPrompt)
 	default:
 		return ""
