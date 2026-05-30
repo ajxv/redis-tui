@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ajxv/redis-tui/internal/redis"
@@ -572,7 +573,13 @@ func (m Model) View() string {
 		if contentWidth <= 0 {
 			contentWidth = 78
 		}
-		outputContent := statusTextStyle.Width(contentWidth).Render(m.Output)
+		var outputContent string
+		trimmed := strings.TrimSpace(m.Output)
+		if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+			outputContent = lipgloss.NewStyle().Width(contentWidth).Render(colorizeJSON(m.Output))
+		} else {
+			outputContent = statusTextStyle.Width(contentWidth).Render(m.Output)
+		}
 		return "\nOutput:\n" + outputContent + ttlText + copyText + "\n\n" + helpText
 	case StateBrowser:
 		return m.Browser.View()

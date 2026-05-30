@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0-beta] - 2026-05-30
+
+### Added
+- JSON values are now automatically detected, pretty-printed with indentation, and syntax-highlighted in the output view. Keys are colored cyan, string values yellow, numbers pink, and booleans/null red.
+
 ## [1.0.1-beta] - 2026-05-27
 
 ### Fixed
@@ -44,5 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Export / Import keys and entire databases via JSON (`DUMP`/`RESTORE`).
 - Exponential backoff reconnection (200 ms → 25.6 s cap) on connection loss.
 
+[1.1.0-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.1.0-beta
 [1.0.1-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.0.1-beta
 [1.0.0-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.0.0-beta

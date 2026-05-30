@@ -37,7 +37,11 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 	switch m.SelectedOp {
 	case OpGet, OpHGet, OpInfo:
 		if result, ok := msg.Result.(string); ok {
-			m.Output = result
+			if m.SelectedOp != OpInfo {
+				m.Output = tryPrettyJSON(result)
+			} else {
+				m.Output = result
+			}
 			m.CurrentState = StateOutput
 			if m.SelectedOp != OpInfo {
 				m.ActiveTTL = "fetching..."
