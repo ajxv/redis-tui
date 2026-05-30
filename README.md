@@ -7,6 +7,10 @@
 
 An interactive, fast, and lightweight Terminal User Interface (TUI) for exploring and managing your Redis databases. Built with Go and the [Bubble Tea](https://github.com/charmbracelet/bubbletea) framework, it replaces repetitive CLI commands with an intuitive, keyboard-driven UI.
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="redis-tui demo" width="760" />
+</p>
+
 ## Features
 
 - **Interactive Database Explorer:** Browse through thousands of keys with SCAN-based pagination.
