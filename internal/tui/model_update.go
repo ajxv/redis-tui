@@ -3,6 +3,7 @@ package tui
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"runtime"
@@ -39,6 +40,9 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		if result, ok := msg.Result.(string); ok {
 			if m.SelectedOp != OpInfo {
 				m.Output = tryPrettyJSON(result)
+				if m.SelectedOp == OpGet {
+					m.Browser.ActiveKeyType = "string"
+				}
 			} else {
 				m.Output = result
 			}
@@ -49,15 +53,32 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case OpAddItem:
+		// Item added; re-check the key type, which reloads the right collection
+		// browser with the new field/member in place.
+		m.SelectedOp = OpCheckType
+		return m.switchToLoadingAndExecute(sendRedisCmd(
+			m.Conn, m.Reader,
+			redis.RedisCmd{Name: "TYPE", Args: []string{m.ActiveKey}},
+			m.ReadTimeout,
+		))
+
 	case OpHKeys:
 		if result, ok := msg.Result.([]any); ok {
 			var items []list.Item
 			for _, key := range result {
 				if key, ok := key.(string); ok {
-					items = append(items, ListItem{title: key, desc: "Hash Field"})
+					items = append(items, ListItem{title: key, desc: "field"})
 				}
 			}
+			// A fresh view of the key: drop any filter left over from a
+			// previous visit before loading items. SetItems' returned Cmd
+			// (which recomputes filtered results) only matters while a filter
+			// is still active, and ResetFilter makes sure one never lingers
+			// here to silently hide every field behind a stale query.
+			m.Browser.FieldsList.ResetFilter()
 			m.Browser.FieldsList.SetItems(items)
+			m.Browser.ActiveKeyType = "hash"
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
 		} else {
@@ -73,17 +94,34 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 
 	case OpExplore:
 		if result, ok := msg.Result.(ScanResult); ok {
+			var cmd tea.Cmd
 			if m.Browser.Cursor == "0" || m.Browser.Cursor == "" {
-				m.Browser.KeyList.SetItems(result.Keys)
+				// Fresh scan: drop any filter left over from a previous visit
+				// (see the OpHKeys comment above) rather than silently
+				// filtering the new results against a stale query.
+				m.Browser.KeyList.ResetFilter()
+				items := result.Keys
+				// Add pickers lead with a "＋ new key…" action row (export does not).
+				if m.Browser.Picking && isAddOp(m.PickerOp) {
+					action := NewActionItem("＋ new "+m.Browser.PickerType+" key…", "newkey")
+					items = append([]list.Item{action}, items...)
+				}
+				cmd = m.Browser.KeyList.SetItems(items)
 			} else {
+				// Paginating ("load more"): a filter may legitimately still be
+				// active, so the returned Cmd (which recomputes filtered
+				// results against the appended items) must be run rather than
+				// discarded, or matches among the newly-loaded keys wouldn't
+				// show up until some unrelated later keystroke.
 				items := m.Browser.KeyList.Items()
 				items = append(items, result.Keys...)
-				m.Browser.KeyList.SetItems(items)
+				cmd = m.Browser.KeyList.SetItems(items)
 			}
 			m.Browser.Cursor = result.Cursor
 			m.Browser.HasMore = result.Cursor != "0"
 			m.Browser.ViewingFields = false
 			m.CurrentState = StateBrowser
+			return m, cmd
 		}
 
 	case OpLRange:
@@ -93,14 +131,16 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			for i, v := range resp {
 				if s, ok := v.(string); ok {
 					idx := baseIndex + i
-					newItems = append(newItems, ListItem{index: idx, title: s, desc: "Index: " + strconv.Itoa(idx)})
+					newItems = append(newItems, ListItem{index: idx, title: s, desc: "idx " + strconv.Itoa(idx)})
 				}
 			}
+			var cmd tea.Cmd
 			if baseIndex == 0 {
-				m.Browser.FieldsList.SetItems(newItems)
+				m.Browser.FieldsList.ResetFilter()
+				cmd = m.Browser.FieldsList.SetItems(newItems)
 			} else {
 				existing := m.Browser.FieldsList.Items()
-				m.Browser.FieldsList.SetItems(append(existing, newItems...))
+				cmd = m.Browser.FieldsList.SetItems(append(existing, newItems...))
 			}
 			if len(resp) >= fieldPageSize {
 				m.Browser.HasMoreFields = true
@@ -108,9 +148,11 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.Browser.HasMoreFields = false
 			}
+			m.Browser.ActiveKeyType = "list"
 			m.SelectedOp = OpExploreList
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
+			return m, cmd
 		} else {
 			if s, ok := msg.Result.(string); ok && s != "" {
 				m.Output = s
@@ -133,20 +175,24 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			var newItems []list.Item
 			for i, v := range members {
 				if s, ok := v.(string); ok {
-					newItems = append(newItems, ListItem{index: baseIndex + i, title: s, desc: "Index: " + strconv.Itoa(baseIndex+i)})
+					newItems = append(newItems, ListItem{index: baseIndex + i, title: s, desc: "idx " + strconv.Itoa(baseIndex+i)})
 				}
 			}
+			var cmd tea.Cmd
 			if isFirstPage {
-				m.Browser.FieldsList.SetItems(newItems)
+				m.Browser.FieldsList.ResetFilter()
+				cmd = m.Browser.FieldsList.SetItems(newItems)
 			} else {
 				existing := m.Browser.FieldsList.Items()
-				m.Browser.FieldsList.SetItems(append(existing, newItems...))
+				cmd = m.Browser.FieldsList.SetItems(append(existing, newItems...))
 			}
 			m.Browser.FieldCursor = newCursor
 			m.Browser.HasMoreFields = newCursor != "0"
+			m.Browser.ActiveKeyType = "set"
 			m.SelectedOp = OpExploreSet
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
+			return m, cmd
 		} else {
 			// Covers: Redis error strings (WRONGTYPE), null arrays returned as
 			// "(nil)" string, and malformed SSCAN responses with len != 2.
@@ -169,15 +215,17 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 					score = s
 				}
 				if ok1 {
-					newItems = append(newItems, ListItem{title: member, desc: "Score: " + score})
+					newItems = append(newItems, ListItem{title: member, desc: "score:" + score})
 				}
 			}
 			memberCount := len(resp) / 2
+			var cmd tea.Cmd
 			if baseOffset == 0 {
-				m.Browser.FieldsList.SetItems(newItems)
+				m.Browser.FieldsList.ResetFilter()
+				cmd = m.Browser.FieldsList.SetItems(newItems)
 			} else {
 				existing := m.Browser.FieldsList.Items()
-				m.Browser.FieldsList.SetItems(append(existing, newItems...))
+				cmd = m.Browser.FieldsList.SetItems(append(existing, newItems...))
 			}
 			if memberCount >= fieldPageSize {
 				m.Browser.HasMoreFields = true
@@ -185,9 +233,11 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.Browser.HasMoreFields = false
 			}
+			m.Browser.ActiveKeyType = "zset"
 			m.SelectedOp = OpExploreZSet
 			m.Browser.ViewingFields = true
 			m.CurrentState = StateBrowser
+			return m, cmd
 		} else {
 			if s, ok := msg.Result.(string); ok && s != "" {
 				m.Output = s
@@ -243,7 +293,16 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		m.ActiveTTL = "fetching..."
 		return m, fetchTTL(m.Conn, m.Reader, m.ActiveKey, m.ReadTimeout)
 
-	case OpSet, OpLSet, OpRename, OpExpirySet, OpExport, OpImport, OpExportDB, OpImportDB:
+	case OpImportField:
+		// Field imported into the current key; reload the browser so it shows.
+		m.SelectedOp = OpCheckType
+		return m.switchToLoadingAndExecute(sendRedisCmd(
+			m.Conn, m.Reader,
+			redis.RedisCmd{Name: "TYPE", Args: []string{m.ActiveKey}},
+			m.ReadTimeout,
+		))
+
+	case OpSet, OpLSet, OpRename, OpExpirySet, OpExport, OpImport, OpExportDB, OpImportDB, OpExportField:
 		if str, ok := msg.Result.(string); ok {
 			m.Output = str
 		} else if num, ok := msg.Result.(int); ok {
@@ -266,6 +325,10 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case OpDel:
+		// Discard the confirmation screen's back-navigation entry now that the
+		// delete has actually succeeded — not before, in handleStateConfirmationKey,
+		// or a failed delete would lose its way back to the browser (see OpHDel etc.).
+		m.popState()
 		m.Output = "Deleted Key: " + m.ActiveKey
 		m.SelectedOp = OpExplore
 		pattern := m.LastPattern
@@ -277,11 +340,13 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		return m.switchToLoadingAndExecute(scanRedisKeys(m.Conn, m.Reader, pattern, "0"))
 
 	case OpHDel:
+		m.popState()
 		m.Output = "Deleted Hash Key: " + m.ActiveKey
 		m.SelectedOp = OpHKeys
 		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "HKEYS", Args: []string{m.ActiveKey}}, m.ReadTimeout))
 
 	case OpLRem:
+		m.popState()
 		m.Output = "Removed element from list: " + m.ActiveKey
 		m.Browser.FieldOffset = 0
 		m.Browser.HasMoreFields = false
@@ -290,6 +355,7 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "LRANGE", Args: []string{m.ActiveKey, "0", end}}, m.ReadTimeout))
 
 	case OpSRem:
+		m.popState()
 		m.Output = "Removed element from set: " + m.ActiveKey
 		m.Browser.FieldCursor = ""
 		m.Browser.HasMoreFields = false
@@ -298,6 +364,7 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "SSCAN", Args: []string{m.ActiveKey, "0", "COUNT", count}}, m.ReadTimeout))
 
 	case OpZRem:
+		m.popState()
 		m.Output = "Removed element from sorted set: " + m.ActiveKey
 		m.Browser.FieldOffset = 0
 		m.Browser.HasMoreFields = false
@@ -305,7 +372,16 @@ func handleRedisResult(m Model, msg RedisResultMsg) (tea.Model, tea.Cmd) {
 		end := strconv.Itoa(fieldPageSize - 1)
 		return m.switchToLoadingAndExecute(sendRedisCmd(m.Conn, m.Reader, redis.RedisCmd{Name: "ZRANGE", Args: []string{m.ActiveKey, "0", end, "WITHSCORES"}}, m.ReadTimeout))
 
-	case OpDelete, OpHSet, OpRPush, OpLPush, OpSAdd, OpZAdd:
+	case OpHSet:
+		// Reached only by the in-place hash-field edit ('e' on an OpHGet
+		// output) — the browser's "add field" overlay always re-checks TYPE
+		// afterward (OpAddItem) rather than landing here. HSET's raw reply is
+		// just 0 or 1 (new vs. existing field), which reads as a cryptic
+		// number; show a real confirmation instead.
+		m.Output = fmt.Sprintf("Updated %s.%s", m.ActiveKey, m.ActiveField)
+		m.CurrentState = StateOutput
+
+	case OpDelete, OpRPush, OpLPush, OpSAdd, OpZAdd:
 		if res, ok := msg.Result.(int); ok {
 			m.Output = strconv.Itoa(res)
 		} else {
@@ -363,7 +439,7 @@ func handleStateOutputKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.PreservedTTL = 0
 		if m.ActiveTTL != "no expiry" && m.ActiveTTL != "fetching..." && m.ActiveTTL != "" {
-			if secs, err := strconv.Atoi(strings.TrimSuffix(m.ActiveTTL, "s")); err == nil && secs > 0 {
+			if secs, err := strconv.Atoi(strings.TrimSuffix(m.ActiveTTL, " s")); err == nil && secs > 0 {
 				m.PreservedTTL = secs
 			}
 		}
@@ -405,6 +481,13 @@ func handleStateOutputKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.Input.Input.Focus()
 		m.pushState(m.CurrentState)
 		m.CurrentState = StateInputValue
+
+	default:
+		// Forward navigation keys (↑/↓, pgup/pgdn, home/end, j/k…) to the
+		// viewport so long output scrolls.
+		var cmd tea.Cmd
+		m.Viewport, cmd = m.Viewport.Update(keyMsg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -417,8 +500,11 @@ func handleStateConfirmationKey(m Model, keyMsg tea.KeyMsg) (tea.Model, tea.Cmd)
 		return m, nil
 
 	case "y", "Y":
-		m.popState()
-
+		// Don't pop here: if the command below fails, the error lands in
+		// StateOutput and needs this entry still on the stack so Esc can find
+		// its way back to the browser. The success handlers in handleRedisResult
+		// (OpDel, OpHDel, OpLRem, OpSRem, OpZRem) pop it once they know the
+		// delete actually went through.
 		switch m.SelectedOp {
 		case OpQuit:
 			return m, tea.Quit

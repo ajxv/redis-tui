@@ -1,6 +1,8 @@
 package tui_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,6 +11,40 @@ import (
 
 	"github.com/ajxv/redis-tui/internal/tui"
 )
+
+// TestOpString_MapsToRedisCommandName verifies every Op that's actually sent
+// as a Redis command name (via redis.RedisCmd{Name: op.String()}) resolves to
+// a real command rather than falling through to the "UNKNOWN" default —
+// OpLSet previously had no case here, so editing a list element sent Redis
+// the literal command name "UNKNOWN" and always failed.
+func TestOpString_MapsToRedisCommandName(t *testing.T) {
+	cases := []struct {
+		op   tui.Op
+		want string
+	}{
+		{tui.OpSet, "SET"},
+		{tui.OpHSet, "HSET"},
+		{tui.OpZAdd, "ZADD"},
+		{tui.OpRPush, "RPUSH"},
+		{tui.OpLPush, "LPUSH"},
+		{tui.OpSAdd, "SADD"},
+		{tui.OpLSet, "LSET"},
+		{tui.OpRename, "RENAME"},
+		{tui.OpExpirySet, "EXPIRE"},
+		{tui.OpDel, "DEL"},
+		{tui.OpHDel, "HDEL"},
+		{tui.OpLRem, "LREM"},
+		{tui.OpSRem, "SREM"},
+		{tui.OpZRem, "ZREM"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.want, func(t *testing.T) {
+			if got := tc.op.String(); got != tc.want {
+				t.Errorf("%v.String(): want %q, got %q", tc.op, tc.want, got)
+			}
+		})
+	}
+}
 
 // ============================================================
 // 1. INPUT FLOW  (InputCompleteMsg)
@@ -28,9 +64,10 @@ func TestInput_Key_DispatchingOps(t *testing.T) {
 		{tui.OpSAdd, tui.StateInputValue, false},
 		{tui.OpHSet, tui.StateInputField, false}, // asks for field next
 		{tui.OpZAdd, tui.StateInputField, false},
-		{tui.OpHGet, tui.StateLoading, true},   // HKEYS dispatches
-		{tui.OpDelete, tui.StateLoading, true}, // DEL dispatches
-		{tui.OpExport, tui.StateInputFilePath, false},
+		{tui.OpHGet, tui.StateLoading, true}, // HKEYS dispatches
+		// DELETE routes to the confirm screen rather than dispatching DEL
+		// immediately — a typo'd key name must not be unrecoverable.
+		{tui.OpDelete, tui.StateConfirmation, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.op.String(), func(t *testing.T) {
@@ -48,6 +85,9 @@ func TestInput_Key_DispatchingOps(t *testing.T) {
 			}
 			if tc.wantCmd && cmd == nil {
 				t.Error("expected a non-nil tea.Cmd")
+			}
+			if tc.op == tui.OpDelete && m2.SelectedOp != tui.OpDel {
+				t.Errorf("SelectedOp: want OpDel (so 'y' on the confirm screen sends DEL), got %v", m2.SelectedOp)
 			}
 		})
 	}
@@ -390,8 +430,8 @@ func TestResult_ZRange_LoadsZSetItemsWithScores(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("item count: want 2, got %d", len(items))
 	}
-	if desc := items[0].(tui.ListItem).Description(); desc != "Score: 1.5" {
-		t.Errorf("description: want %q, got %q", "Score: 1.5", desc)
+	if desc := items[0].(tui.ListItem).Description(); desc != "score:1.5" {
+		t.Errorf("description: want %q, got %q", "score:1.5", desc)
 	}
 }
 
@@ -516,7 +556,7 @@ func TestResult_ExpireAfterSet_ResetsOp(t *testing.T) {
 // TestResult_IntegerOutput verifies that ops returning an integer count show
 // it as the output string.
 func TestResult_IntegerOutput(t *testing.T) {
-	for _, op := range []tui.Op{tui.OpHSet, tui.OpRPush, tui.OpSAdd, tui.OpZAdd, tui.OpDelete} {
+	for _, op := range []tui.Op{tui.OpRPush, tui.OpSAdd, tui.OpZAdd, tui.OpDelete} {
 		t.Run(op.String(), func(t *testing.T) {
 			m := newTestModel()
 			m.SelectedOp = op
@@ -530,6 +570,29 @@ func TestResult_IntegerOutput(t *testing.T) {
 				t.Errorf("output: want %q, got %q", "3", m2.Output)
 			}
 		})
+	}
+}
+
+// TestResult_HSet_ShowsFriendlyMessage verifies that committing an in-place
+// hash-field edit ('e' on an OpHGet output) shows a real confirmation instead
+// of HSET's raw reply (0 or 1 — new vs. existing field), which read as a
+// cryptic bare number with no indication anything happened.
+func TestResult_HSet_ShowsFriendlyMessage(t *testing.T) {
+	m := newTestModel()
+	m.SelectedOp = tui.OpHSet
+	m.ActiveKey = "myhash"
+	m.ActiveField = "f1"
+
+	m2, _ := send(m, tui.RedisResultMsg{Result: 0})
+
+	if m2.CurrentState != tui.StateOutput {
+		t.Errorf("state: want StateOutput, got %v", m2.CurrentState)
+	}
+	if m2.Output == "0" || m2.Output == "1" {
+		t.Errorf("output: want a friendly message, got the raw HSET reply %q", m2.Output)
+	}
+	if !strings.Contains(m2.Output, "myhash") || !strings.Contains(m2.Output, "f1") {
+		t.Errorf("output: want a message naming the key and field, got %q", m2.Output)
 	}
 }
 
@@ -599,13 +662,17 @@ func TestSelectKey_DispatchesTypeCheck(t *testing.T) {
 }
 
 // TestSelectField_Hash_DispatchesHGet verifies that selecting a hash field
-// dispatches HGET.
+// dispatches HGET regardless of what SelectedOp was left over from a prior
+// command — routing is by Browser.ActiveKeyType (always kept accurate), not
+// SelectedOp, which can go stale after e.g. an export. OpExportField in the
+// list below stands in for exactly that stale-state regression case.
 func TestSelectField_Hash_DispatchesHGet(t *testing.T) {
-	for _, op := range []tui.Op{tui.OpHGet, tui.OpHKeys, tui.OpExplore} {
+	for _, op := range []tui.Op{tui.OpHGet, tui.OpHKeys, tui.OpExplore, tui.OpExportField} {
 		t.Run(op.String(), func(t *testing.T) {
 			m := newTestModel()
 			m.SelectedOp = op
 			m.ActiveKey = "myhash"
+			m.Browser.ActiveKeyType = "hash"
 			m.CurrentState = tui.StateBrowser
 
 			m2, cmd := send(m, tui.SelectFieldMsg{Key: "myhash", Field: "f1"})
@@ -628,6 +695,7 @@ func TestSelectField_Hash_DispatchesHGet(t *testing.T) {
 func TestSelectField_List_ShowsDirectOutput(t *testing.T) {
 	m := newTestModel()
 	m.SelectedOp = tui.OpExploreList
+	m.Browser.ActiveKeyType = "list"
 	m.CurrentState = tui.StateBrowser
 
 	m2, cmd := send(m, tui.SelectFieldMsg{Key: "mylist", Field: "item-value", Index: 2})
@@ -648,24 +716,33 @@ func TestSelectField_List_ShowsDirectOutput(t *testing.T) {
 // ============================================================
 
 // TestDeleteRequest_OpMapping verifies that the correct Op is chosen based on
-// context (key vs field, and the current explore mode).
+// context (key vs field, and the current key type). Routing is by
+// Browser.ActiveKeyType, not SelectedOp — the "stale SelectedOp" cases below
+// pair a leftover, unrelated SelectedOp with the real ActiveKeyType to prove
+// a stray value like OpExportField (left over after exporting a field) can't
+// misroute a later delete into the wrong Redis command.
 func TestDeleteRequest_OpMapping(t *testing.T) {
 	cases := []struct {
-		name      string
-		currentOp tui.Op
-		field     string // empty = key delete
-		wantOp    tui.Op
+		name          string
+		currentOp     tui.Op
+		activeKeyType string
+		field         string // empty = key delete
+		wantOp        tui.Op
 	}{
-		{"key", tui.OpExplore, "", tui.OpDel},
-		{"hash field", tui.OpHKeys, "f", tui.OpHDel},
-		{"list element", tui.OpExploreList, "v", tui.OpLRem},
-		{"set member", tui.OpExploreSet, "m", tui.OpSRem},
-		{"zset member", tui.OpExploreZSet, "m", tui.OpZRem},
+		{"key", tui.OpExplore, "", "", tui.OpDel},
+		{"hash field", tui.OpHKeys, "hash", "f", tui.OpHDel},
+		{"list element", tui.OpExploreList, "list", "v", tui.OpLRem},
+		{"set member", tui.OpExploreSet, "set", "m", tui.OpSRem},
+		{"zset member", tui.OpExploreZSet, "zset", "m", tui.OpZRem},
+		{"list element, stale SelectedOp", tui.OpExportField, "list", "v", tui.OpLRem},
+		{"set member, stale SelectedOp", tui.OpExportField, "set", "m", tui.OpSRem},
+		{"zset member, stale SelectedOp", tui.OpExportField, "zset", "m", tui.OpZRem},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newTestModel()
 			m.SelectedOp = tc.currentOp
+			m.Browser.ActiveKeyType = tc.activeKeyType
 			m.CurrentState = tui.StateBrowser
 
 			m2, _ := send(m, tui.DeleteRequestMsg{Key: "k", Field: tc.field})
@@ -941,7 +1018,7 @@ func TestTTL_PreservedWhenEditing(t *testing.T) {
 	m := newTestModel()
 	m.SelectedOp = tui.OpGet
 	m.Output = "val"
-	m.ActiveTTL = "120s"
+	m.ActiveTTL = "120 s"
 	m.StateNavigationHistory = []tui.AppState{tui.StateBrowser}
 	m.CurrentState = tui.StateOutput
 
@@ -1175,9 +1252,9 @@ func TestTTLResult_Display(t *testing.T) {
 	}{
 		{-1, "no expiry"},
 		{-2, "no expiry"},
-		{0, "0s"},
-		{1, "1s"},
-		{3600, "3600s"},
+		{0, "0 s"},
+		{1, "1 s"},
+		{3600, "3600 s"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.display, func(t *testing.T) {
@@ -1311,6 +1388,8 @@ func TestView_EachState_NonEmpty(t *testing.T) {
 // output value.
 func TestView_Output_ShowsValue(t *testing.T) {
 	m := newTestModel()
+	m.WindowWidth = 80
+	m.WindowHeight = 24
 	m.CurrentState = tui.StateOutput
 	m.Output = "redis-value-42"
 	m.SelectedOp = tui.OpGet
@@ -1346,7 +1425,7 @@ func TestView_Output_InfoHelpText(t *testing.T) {
 	if strings.Contains(view, "e: edit") {
 		t.Error("INFO output should not show edit hint")
 	}
-	if !strings.Contains(view, "c: copy") {
+	if !strings.Contains(view, "copy") {
 		t.Error("INFO output should show copy hint")
 	}
 }
@@ -1377,7 +1456,6 @@ func TestView_Confirmation_ShowsCorrectPrompt(t *testing.T) {
 		{tui.OpDel, "mykey", "", "mykey"},
 		{tui.OpHDel, "h", "myfield", "myfield"},
 		{tui.OpLRem, "l", "myval", "myval"},
-		{tui.OpQuit, "", "", "exit"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.op.String(), func(t *testing.T) {
@@ -1589,6 +1667,64 @@ func TestMenu_EscWhileFilteringCancelsFilter(t *testing.T) {
 	}
 }
 
+// TestMenu_EscAfterFilterAppliedClearsIt verifies that once a filter is
+// accepted (Enter, moving from Filtering to FilterApplied), Esc still clears
+// it. isFiltering only covers the actively-typing Filtering state, so this
+// exercises the case that was previously missed: pressing Esc right after
+// accepting a filter did nothing at all, permanently stranding the menu on
+// the filtered subset with no way back short of quitting the app.
+func TestMenu_EscAfterFilterAppliedClearsIt(t *testing.T) {
+	m := newMenuTestModel()
+	m.CurrentState = tui.StateMenu
+
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if m.MenuList.FilterState() != list.Filtering {
+		t.Skip("filter did not activate — skipping")
+	}
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.MenuList.FilterState() != list.FilterApplied {
+		t.Skip("filter did not apply — skipping")
+	}
+
+	m2, _ := send(m, tea.KeyMsg{Type: tea.KeyEscape})
+
+	if m2.MenuList.FilterState() != list.Unfiltered {
+		t.Errorf("filter state: want Unfiltered after Esc, got %v", m2.MenuList.FilterState())
+	}
+}
+
+// TestMenu_Q_QuitsDirectly verifies that 'q' on the idle main menu quits
+// immediately (no confirmation dialog).
+func TestMenu_Q_QuitsDirectly(t *testing.T) {
+	m := newMenuTestModel()
+	m.CurrentState = tui.StateMenu
+
+	m2, cmd := send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+
+	if m2.CurrentState == tui.StateConfirmation {
+		t.Error("'q' on the menu should not open a confirmation dialog")
+	}
+	if cmd == nil {
+		t.Fatal("expected a quit cmd, got nil")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("cmd() should produce a QuitMsg")
+	}
+}
+
+// TestMenu_EscIsNoOp verifies that Esc on the idle main menu is a no-op — it
+// neither quits nor opens a confirmation dialog (the menu is the root screen).
+func TestMenu_EscIsNoOp(t *testing.T) {
+	m := newMenuTestModel()
+	m.CurrentState = tui.StateMenu
+
+	m2, _ := send(m, tea.KeyMsg{Type: tea.KeyEscape})
+
+	if m2.CurrentState != tui.StateMenu {
+		t.Errorf("state: want StateMenu, got %v", m2.CurrentState)
+	}
+}
+
 // TestMenu_QWhileFilteringIsNotQuit verifies that typing 'q' while filtering
 // is treated as a search character, not a quit trigger.
 func TestMenu_QWhileFilteringIsNotQuit(t *testing.T) {
@@ -1765,5 +1901,274 @@ func TestBackMsg_ZAdd_ScoreHintRestoredOnEsc(t *testing.T) {
 	}
 	if m2.Input.Hint != "Input the score:" {
 		t.Errorf("Input.Hint: want %q, got %q", "Input the score:", m2.Input.Hint)
+	}
+}
+
+// ============================================================
+// 14. KEY PICKER + ADD-ITEM (collection commands)
+// ============================================================
+
+// newPickerMenuModel returns a menu model whose only (selected) command is cmd.
+func newPickerMenuModel(cmd string) tui.Model {
+	m := newTestModel()
+	m.MenuList = list.New([]list.Item{tui.NewListItem(cmd, "desc")}, list.NewDefaultDelegate(), 40, 20)
+	m.CurrentState = tui.StateMenu
+	return m
+}
+
+// TestMenu_CollectionCommand_StartsKeyPicker verifies that the collection
+// commands open the type-filtered key picker instead of a blank key prompt.
+func TestMenu_CollectionCommand_StartsKeyPicker(t *testing.T) {
+	cases := []struct{ cmd, typ string }{
+		{"HSET", "hash"}, {"HGET", "hash"}, {"SADD", "set"},
+		{"ZADD", "zset"}, {"RPUSH", "list"}, {"LPUSH", "list"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cmd, func(t *testing.T) {
+			m := newPickerMenuModel(tc.cmd)
+			m2, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+			if !m2.Browser.Picking {
+				t.Error("Browser.Picking should be true")
+			}
+			if m2.Browser.PickerType != tc.typ {
+				t.Errorf("PickerType: want %q, got %q", tc.typ, m2.Browser.PickerType)
+			}
+			if m2.PickerOp != tui.ParseOp(tc.cmd) {
+				t.Errorf("PickerOp not preserved for %s", tc.cmd)
+			}
+			if m2.CurrentState != tui.StateLoading {
+				t.Errorf("state: want StateLoading, got %v", m2.CurrentState)
+			}
+			if cmd == nil {
+				t.Error("expected a scan cmd")
+			}
+		})
+	}
+}
+
+// TestMenu_NonCollectionCommand_UsesKeyPrompt verifies GET/SET/DELETE go
+// straight to the blank key prompt (no picker).
+func TestMenu_NonCollectionCommand_UsesKeyPrompt(t *testing.T) {
+	for _, cmd := range []string{"GET", "SET", "DELETE"} {
+		t.Run(cmd, func(t *testing.T) {
+			m := newPickerMenuModel(cmd)
+			m2, _ := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+			if m2.Browser.Picking {
+				t.Error("Picking should be false for non-collection command")
+			}
+			if m2.CurrentState != tui.StateInputKey {
+				t.Errorf("state: want StateInputKey, got %v", m2.CurrentState)
+			}
+		})
+	}
+}
+
+// TestMenu_Export_StartsKeyPicker verifies EXPORT opens an all-keys picker.
+func TestMenu_Export_StartsKeyPicker(t *testing.T) {
+	m := newPickerMenuModel("EXPORT")
+	m2, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if !m2.Browser.Picking {
+		t.Error("Browser.Picking should be true")
+	}
+	if m2.Browser.PickerType != "" {
+		t.Errorf("PickerType: want empty (any type), got %q", m2.Browser.PickerType)
+	}
+	if m2.PickerOp != tui.OpExport {
+		t.Error("PickerOp should be OpExport")
+	}
+	if m2.CurrentState != tui.StateLoading {
+		t.Errorf("state: want StateLoading, got %v", m2.CurrentState)
+	}
+	if cmd == nil {
+		t.Error("expected a scan cmd")
+	}
+}
+
+// TestExportPicker_SelectKey_PrefillsDumpPath verifies that picking a key for
+// EXPORT routes to the file-path prompt with a sanitized default destination.
+func TestExportPicker_SelectKey_PrefillsDumpPath(t *testing.T) {
+	m := newTestModel()
+	m.PickerOp = tui.OpExport
+	m.Browser.Picking = true
+	m.CurrentState = tui.StateBrowser
+
+	m2, _ := send(m, tui.SelectKeyMsg{Key: "user:42:session"})
+
+	if m2.CurrentState != tui.StateInputFilePath {
+		t.Errorf("state: want StateInputFilePath, got %v", m2.CurrentState)
+	}
+	if got := m2.Input.Input.Value(); got != "./user_42_session.dump" {
+		t.Errorf("default path: want ./user_42_session.dump, got %q", got)
+	}
+	// Picker stays active so returning to the list keeps exporting on re-select.
+	if !m2.Browser.Picking {
+		t.Error("Picking should stay active across the export file prompt")
+	}
+}
+
+// TestPicker_NewKey_RoutesToAddForm verifies the "＋ new key…" row prompts for a
+// new key name and then opens the add form directly (add-intent commands).
+func TestPicker_NewKey_RoutesToAddForm(t *testing.T) {
+	m := newTestModel()
+	m.PickerOp = tui.OpHSet
+	m.Browser.Picking = true
+	m.Browser.PickerType = "hash"
+	m.CurrentState = tui.StateBrowser
+
+	// Step 1: choose "＋ new key…" → key-name prompt (picker context stays active).
+	m, _ = send(m, tui.NewKeyRequestMsg{})
+	if m.SelectedOp != tui.OpHSet {
+		t.Fatalf("SelectedOp: want OpHSet, got %v", m.SelectedOp)
+	}
+	if m.CurrentState != tui.StateInputKey {
+		t.Fatalf("state: want StateInputKey, got %v", m.CurrentState)
+	}
+
+	// Step 2: submit the new key name → add form opens for that key.
+	m2, _ := send(m, tui.InputCompleteMsg{Value: "new:hash", Type: tui.InputKey})
+	if m2.CurrentState != tui.StateBrowser {
+		t.Errorf("state: want StateBrowser, got %v", m2.CurrentState)
+	}
+	if !m2.Browser.AddingField {
+		t.Error("AddingField should be true (add form open)")
+	}
+	if m2.Browser.ActiveKey != "new:hash" || m2.Browser.ActiveKeyType != "hash" {
+		t.Errorf("add target: got key=%q type=%q", m2.Browser.ActiveKey, m2.Browser.ActiveKeyType)
+	}
+}
+
+// TestPicker_ExistingKey_OpensAddForm verifies that picking an existing key for
+// an add command jumps straight into the add form (not the browse view).
+func TestPicker_ExistingKey_OpensAddForm(t *testing.T) {
+	m := newTestModel()
+	m.PickerOp = tui.OpSAdd
+	m.Browser.Picking = true
+	m.Browser.PickerType = "set"
+	m.CurrentState = tui.StateBrowser
+
+	m2, _ := send(m, tui.SelectKeyMsg{Key: "online:users"})
+
+	if !m2.Browser.AddingField {
+		t.Error("AddingField should be true after picking an existing key to add to")
+	}
+	if m2.Browser.ActiveKey != "online:users" || m2.Browser.ActiveKeyType != "set" {
+		t.Errorf("add target: got key=%q type=%q", m2.Browser.ActiveKey, m2.Browser.ActiveKeyType)
+	}
+	if m2.CurrentState != tui.StateBrowser {
+		t.Errorf("state: want StateBrowser, got %v", m2.CurrentState)
+	}
+}
+
+// TestAddItem_EntersLoading verifies the add-item overlay commit dispatches a
+// loading command for every collection type.
+func TestAddItem_EntersLoading(t *testing.T) {
+	for _, typ := range []string{"hash", "zset", "set", "list"} {
+		t.Run(typ, func(t *testing.T) {
+			m := newTestModel()
+			m2, cmd := send(m, tui.AddItemMsg{Key: "k", Type: typ, A: "a", B: "b"})
+			if m2.SelectedOp != tui.OpAddItem {
+				t.Errorf("SelectedOp: want OpAddItem, got %v", m2.SelectedOp)
+			}
+			if m2.CurrentState != tui.StateLoading {
+				t.Errorf("state: want StateLoading, got %v", m2.CurrentState)
+			}
+			if cmd == nil {
+				t.Error("expected an add cmd")
+			}
+		})
+	}
+}
+
+// TestInput_FilePath_TabCompletes verifies Tab completes a partial path to the
+// longest common prefix of matching directory entries.
+func TestInput_FilePath_TabCompletes(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"alpha.dump", "alphabet.dump", "zeta.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := newTestModel()
+	m.CurrentState = tui.StateInputFilePath
+	m.Input.Type = tui.InputFilePath
+	m.Input.Input.SetValue(filepath.Join(dir, "alph"))
+
+	m2, _ := send(m, tea.KeyMsg{Type: tea.KeyTab})
+
+	want := filepath.Join(dir, "alpha") // common prefix of alpha.dump / alphabet.dump
+	if got := m2.Input.Input.Value(); got != want {
+		t.Errorf("completion: want %q, got %q", want, got)
+	}
+}
+
+// TestFieldExport_Hash_RoundTrip exercises ExportField → ImportField for a hash
+// field: export fetches the value via HGET and writes self-describing JSON;
+// import reads it back and issues the HSET.
+func TestFieldExport_Hash_RoundTrip(t *testing.T) {
+	fp := filepath.Join(t.TempDir(), "field.json")
+
+	// Export: HGET app-config port → "8098"
+	conn, reader := newMockConn("$4\r\n8098\r\n")
+	out := tui.ExportField(conn, reader, "app-config", "hash", "port", 0, fp)()
+	rr, ok := out.(tui.RedisResultMsg)
+	if !ok || rr.Error != nil {
+		t.Fatalf("export failed: %+v", out)
+	}
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"key": "app-config"`, `"type": "hash"`, `"field": "port"`, `"value": "8098"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("export JSON missing %q; got:\n%s", want, data)
+		}
+	}
+
+	// Import into the browsed key (app-config / hash): HSET returns 1
+	conn2, reader2 := newMockConn(":1\r\n")
+	out2 := tui.ImportField(conn2, reader2, fp, "app-config", "hash")()
+	rr2, ok := out2.(tui.RedisResultMsg)
+	if !ok || rr2.Error != nil {
+		t.Fatalf("import failed: %+v", out2)
+	}
+}
+
+// TestFieldExportRequest_PrefillsPath verifies the export hotkey routes to the
+// file prompt with a sensible default and OpExportField selected.
+func TestFieldExportRequest_PrefillsPath(t *testing.T) {
+	m := newTestModel()
+	m.ActiveKey = "app-config"
+	m.Browser.ActiveKeyType = "hash"
+	m.CurrentState = tui.StateBrowser
+
+	m2, _ := send(m, tui.FieldExportRequestMsg{Field: "port", Index: 0})
+
+	if m2.SelectedOp != tui.OpExportField {
+		t.Errorf("SelectedOp: want OpExportField, got %v", m2.SelectedOp)
+	}
+	if m2.CurrentState != tui.StateInputFilePath {
+		t.Errorf("state: want StateInputFilePath, got %v", m2.CurrentState)
+	}
+	if got := m2.Input.Input.Value(); got != "./app-config_port.json" {
+		t.Errorf("default path: want ./app-config_port.json, got %q", got)
+	}
+}
+
+// TestFieldImportRequest_PromptsForSource verifies the import hotkey routes to
+// the file prompt with OpImportField selected.
+func TestFieldImportRequest_PromptsForSource(t *testing.T) {
+	m := newTestModel()
+	m.CurrentState = tui.StateBrowser
+
+	m2, _ := send(m, tui.FieldImportRequestMsg{})
+
+	if m2.SelectedOp != tui.OpImportField {
+		t.Errorf("SelectedOp: want OpImportField, got %v", m2.SelectedOp)
+	}
+	if m2.CurrentState != tui.StateInputFilePath {
+		t.Errorf("state: want StateInputFilePath, got %v", m2.CurrentState)
 	}
 }

@@ -176,16 +176,37 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 						}
 					}
 
-					// Read pipelined responses
-					for _, k := range rawKeys {
-						desc := "key"
+					// Read pipelined TYPE responses
+					types := make([]string, len(rawKeys))
+					for i := range rawKeys {
+						types[i] = "key"
 						typeResp, err := redis.ReadResp(reader)
 						if err == nil {
 							if typeStr, ok := typeResp.(string); ok {
-								desc = typeStr
+								types[i] = typeStr
 							}
 						}
-						keys = append(keys, ListItem{title: k, desc: desc})
+					}
+
+					// Pipeline TTL commands too, so the key list can show a
+					// countdown for keys about to expire without a per-key
+					// round trip — this is one extra batch per SCAN page, not
+					// one extra request per key.
+					for _, k := range rawKeys {
+						cmd := redis.RedisCmd{Name: "TTL", Args: []string{k}}
+						if _, err := conn.Write(cmd.ToBytes()); err != nil {
+							return RedisResultMsg{Error: err}
+						}
+					}
+					for i, k := range rawKeys {
+						ttl := -1
+						ttlResp, err := redis.ReadResp(reader)
+						if err == nil {
+							if t, ok := ttlResp.(int); ok {
+								ttl = t
+							}
+						}
+						keys = append(keys, ListItem{title: k, desc: types[i], ttl: ttl})
 					}
 				}
 			}
@@ -194,6 +215,81 @@ func scanRedisKeys(conn net.Conn, reader *bufio.Reader, pattern string, cursor s
 		return RedisResultMsg{
 			Result: ScanResult{Cursor: cursor, Keys: keys},
 		}
+	}
+}
+
+// scanRedisKeysOfType scans one page of keys matching pattern and keeps only
+// those whose Redis type equals wantType. Used by the menu key-picker so the
+// user chooses from existing keys of the relevant type.
+func scanRedisKeysOfType(conn net.Conn, reader *bufio.Reader, pattern, cursor, wantType string) tea.Cmd {
+	return func() tea.Msg {
+		if conn == nil {
+			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
+		}
+
+		cmd := redis.RedisCmd{Name: "SCAN", Args: []string{cursor, "MATCH", pattern}}
+		if _, err := conn.Write(cmd.ToBytes()); err != nil {
+			return RedisResultMsg{Error: err}
+		}
+		response, err := redis.ReadResp(reader)
+		if err != nil {
+			return RedisResultMsg{Error: err}
+		}
+
+		var keys []list.Item
+		if resp, ok := response.([]any); ok && len(resp) >= 2 {
+			if c, ok := resp[0].(string); ok {
+				cursor = c
+			}
+			if slice, ok := resp[1].([]any); ok {
+				var rawKeys []string
+				for _, str := range slice {
+					if s, ok := str.(string); ok {
+						rawKeys = append(rawKeys, s)
+					}
+				}
+				if len(rawKeys) > 0 {
+					for _, k := range rawKeys {
+						tc := redis.RedisCmd{Name: "TYPE", Args: []string{k}}
+						if _, err := conn.Write(tc.ToBytes()); err != nil {
+							return RedisResultMsg{Error: err}
+						}
+					}
+					types := make([]string, len(rawKeys))
+					for i := range rawKeys {
+						typeResp, err := redis.ReadResp(reader)
+						if err != nil {
+							return RedisResultMsg{Error: err}
+						}
+						if typeStr, ok := typeResp.(string); ok {
+							types[i] = typeStr
+						}
+					}
+
+					for _, k := range rawKeys {
+						tc := redis.RedisCmd{Name: "TTL", Args: []string{k}}
+						if _, err := conn.Write(tc.ToBytes()); err != nil {
+							return RedisResultMsg{Error: err}
+						}
+					}
+					for i, k := range rawKeys {
+						ttl := -1
+						ttlResp, err := redis.ReadResp(reader)
+						if err != nil {
+							return RedisResultMsg{Error: err}
+						}
+						if t, ok := ttlResp.(int); ok {
+							ttl = t
+						}
+						if types[i] == wantType {
+							keys = append(keys, ListItem{title: k, desc: types[i], ttl: ttl})
+						}
+					}
+				}
+			}
+		}
+
+		return RedisResultMsg{Result: ScanResult{Cursor: cursor, Keys: keys}}
 	}
 }
 

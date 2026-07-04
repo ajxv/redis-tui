@@ -15,9 +15,10 @@ An interactive, fast, and lightweight Terminal User Interface (TUI) for explorin
 
 - **Interactive Database Explorer:** Browse through thousands of keys with SCAN-based pagination.
 - **Context-Aware Drilling:** Navigate into Hash fields, Lists, Sets, and Sorted Sets with full CRUD support.
-- **CRUD Operations Wizard:** Use guided forms to `SET`, `HSET`, `RPUSH`, `LPUSH`, `SADD`, `ZADD`, and more.
+- **Guided CRUD Wizard:** `HSET`, `HGET`, `SADD`, `ZADD`, `RPUSH`, and `LPUSH` let you pick an existing key of the matching type (or create a new one) and add to it through a focused form — no need to remember exact key names.
+- **Auto-Detected JSON:** String values that look like JSON are pretty-printed and syntax-highlighted; the value/`INFO` inspector scrolls for large output.
 - **TTL Management:** Set, clear, or inspect key expiry. TTL is preserved when editing a value in-place.
-- **Export / Import:** Dump individual keys or entire databases to portable JSON files using Redis `DUMP`/`RESTORE`.
+- **Export / Import:** Dump individual keys (pick from a list, with a pre-filled destination) or entire databases to portable JSON files using Redis `DUMP`/`RESTORE`. Export or import a **single hash field / list / set / sorted-set member** to self-describing JSON straight from the field browser. File prompts support `Tab` path completion.
 - **TLS / SSL:** Connect to secured Redis instances (managed Redis services, Redis Cloud, AWS ElastiCache, Upstash) with full mTLS support.
 - **Redis 6+ ACL Auth:** Authenticate with a username and password in addition to the legacy password-only form.
 - **Reconnection with Backoff:** Automatically reconnects after a dropped connection using exponential backoff (200 ms → 25.6 s cap).
@@ -173,6 +174,14 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 | `Esc` | Go back or cancel |
 | `Ctrl+C` | Quit |
 
+### Main Menu
+
+| Key | Action |
+| :--- | :--- |
+| `Enter` | Run the selected command |
+| `/` | Filter commands (type to narrow) |
+| `q` | Quit |
+
 ### Key Browser (Explore mode)
 
 | Key | Action |
@@ -187,6 +196,7 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 
 | Key | Action |
 | :--- | :--- |
+| `↑ / ↓`, `PgUp / PgDn`, `Home / End` | Scroll long output |
 | `e` | Edit value in-place (TTL is preserved) |
 | `c` | Copy value to clipboard |
 | `x` | Set or clear TTL (enter `0` to persist) |
@@ -197,7 +207,10 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 | Key | Action |
 | :--- | :--- |
 | `Enter` | View selected field or member |
+| `a` | Add a field / member |
 | `d` | Delete field or member (with confirmation) |
+| `x` | Export selected field / member to JSON |
+| `i` | Import a field / member from JSON |
 | `Ctrl+R` / `F5` | Refresh |
 
 ## Known Limitations (Beta)

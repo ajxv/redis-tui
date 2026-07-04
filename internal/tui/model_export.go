@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,13 +22,164 @@ type ExportData struct {
 	Value string `json:"value"` // base64 encoded DUMP payload
 }
 
-func resolveFilePath(path string, createDirs bool) (string, error) {
+// FieldExport is the self-describing JSON form of a single hash field, list
+// element, set member, or sorted-set member — exported/imported by value
+// (DUMP/RESTORE only work on whole keys).
+type FieldExport struct {
+	Key   string `json:"key"`
+	Type  string `json:"type"`            // hash | list | set | zset
+	Field string `json:"field,omitempty"` // hash field name (or list index)
+	Value string `json:"value"`           // field value / member
+	Score string `json:"score,omitempty"` // sorted-set score
+}
+
+// readResp writes a command and reads one response under the default deadline.
+func readResp(conn net.Conn, reader *bufio.Reader, cmd redis.RedisCmd) (any, error) {
+	if _, err := conn.Write(cmd.ToBytes()); err != nil {
+		return nil, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+	resp, err := redis.ReadResp(reader)
+	_ = conn.SetReadDeadline(time.Time{})
+	return resp, err
+}
+
+// ExportField writes a single field/member to a self-describing JSON file.
+func ExportField(conn net.Conn, reader *bufio.Reader, key, keyType, field string, index int, filePath string) tea.Cmd {
+	return func() tea.Msg {
+		if conn == nil {
+			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
+		}
+		resolved, err := resolveFilePath(filePath, true, fieldExportFilename(key, keyType, field, index))
+		if err != nil {
+			return RedisResultMsg{Error: err}
+		}
+
+		fe := FieldExport{Key: key, Type: keyType, Field: field}
+		switch keyType {
+		case "hash":
+			resp, err := readResp(conn, reader, redis.RedisCmd{Name: "HGET", Args: []string{key, field}})
+			if err != nil {
+				return RedisResultMsg{Error: err}
+			}
+			s, ok := resp.(string)
+			if !ok || s == "(nil)" {
+				return RedisResultMsg{Error: fmt.Errorf("field %q not found in %q", field, key)}
+			}
+			fe.Value = s
+		case "list":
+			resp, err := readResp(conn, reader, redis.RedisCmd{Name: "LINDEX", Args: []string{key, strconv.Itoa(index)}})
+			if err != nil {
+				return RedisResultMsg{Error: err}
+			}
+			s, _ := resp.(string)
+			fe.Field = strconv.Itoa(index)
+			fe.Value = s
+		case "set":
+			fe.Field = ""
+			fe.Value = field
+		case "zset":
+			resp, err := readResp(conn, reader, redis.RedisCmd{Name: "ZSCORE", Args: []string{key, field}})
+			if err != nil {
+				return RedisResultMsg{Error: err}
+			}
+			fe.Field = ""
+			fe.Value = field
+			if s, ok := resp.(string); ok {
+				fe.Score = s
+			}
+		default:
+			return RedisResultMsg{Error: fmt.Errorf("unsupported type %q for field export", keyType)}
+		}
+
+		data, err := json.MarshalIndent(fe, "", "  ")
+		if err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("failed to marshal JSON: %v", err)}
+		}
+		if err := os.WriteFile(resolved, data, 0600); err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("failed to write file: %v", err)}
+		}
+		label := field
+		if label == "" {
+			label = fe.Value
+		}
+		return RedisResultMsg{Result: fmt.Sprintf("Exported %s entry '%s' to %s", keyType, label, resolved)}
+	}
+}
+
+// ImportField restores a single field/member from a FieldExport JSON file into
+// targetKey — the key currently being browsed — using its field/value/score.
+// The file's type must match targetType (the file's own key is ignored).
+func ImportField(conn net.Conn, reader *bufio.Reader, filePath, targetKey, targetType string) tea.Cmd {
+	return func() tea.Msg {
+		if conn == nil {
+			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
+		}
+		resolved, err := resolveFilePath(filePath, false, "")
+		if err != nil {
+			return RedisResultMsg{Error: err}
+		}
+		raw, err := os.ReadFile(resolved)
+		if err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("failed to read file: %v", err)}
+		}
+		var fe FieldExport
+		if err := json.Unmarshal(raw, &fe); err != nil {
+			return RedisResultMsg{Error: fmt.Errorf("failed to parse JSON: %v", err)}
+		}
+		if fe.Type != "" && targetType != "" && fe.Type != targetType {
+			return RedisResultMsg{Error: fmt.Errorf("file holds a %s entry, but %q is a %s", fe.Type, targetKey, targetType)}
+		}
+		typ := targetType
+		if typ == "" {
+			typ = fe.Type
+		}
+
+		var cmd redis.RedisCmd
+		switch typ {
+		case "hash":
+			if fe.Field == "" {
+				return RedisResultMsg{Error: fmt.Errorf("hash import requires a 'field' in the file")}
+			}
+			cmd = redis.RedisCmd{Name: "HSET", Args: []string{targetKey, fe.Field, fe.Value}}
+		case "list":
+			cmd = redis.RedisCmd{Name: "RPUSH", Args: []string{targetKey, fe.Value}}
+		case "set":
+			cmd = redis.RedisCmd{Name: "SADD", Args: []string{targetKey, fe.Value}}
+		case "zset":
+			score := fe.Score
+			if score == "" {
+				score = "0"
+			}
+			cmd = redis.RedisCmd{Name: "ZADD", Args: []string{targetKey, score, fe.Value}}
+		default:
+			return RedisResultMsg{Error: fmt.Errorf("unsupported type %q in import file", fe.Type)}
+		}
+
+		if _, err := readResp(conn, reader, cmd); err != nil {
+			return RedisResultMsg{Error: err}
+		}
+		return RedisResultMsg{Result: fmt.Sprintf("Imported %s entry into '%s' from %s", typ, targetKey, resolved)}
+	}
+}
+
+// resolveFilePath cleans path, expanding a leading "~/", and creates parent
+// directories when createDirs is set (export destinations). When defaultName
+// is non-empty and path names a directory rather than a file — a trailing
+// separator, ".", "~", or an existing directory on disk — defaultName is
+// appended, so submitting just a folder still produces a usable file instead
+// of failing to write (or, for imports, failing to read) a directory.
+func resolveFilePath(path string, createDirs bool, defaultName string) (string, error) {
 	if strings.HasPrefix(path, "~/") {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("could not determine user home directory: %v", err)
 		}
 		path = filepath.Join(homeDir, path[2:])
+	}
+
+	if defaultName != "" && looksLikeDir(path) {
+		path = filepath.Join(path, defaultName)
 	}
 
 	path = filepath.Clean(path)
@@ -40,6 +192,20 @@ func resolveFilePath(path string, createDirs bool) (string, error) {
 	}
 
 	return path, nil
+}
+
+// looksLikeDir reports whether path names a directory rather than a file:
+// blank, ".", "~", a trailing path separator, or an existing directory.
+func looksLikeDir(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" || trimmed == "." || trimmed == "~" {
+		return true
+	}
+	if strings.HasSuffix(trimmed, "/") || strings.HasSuffix(trimmed, string(os.PathSeparator)) {
+		return true
+	}
+	info, err := os.Stat(trimmed)
+	return err == nil && info.IsDir()
 }
 
 // fetchKeyExportData fetches a single key's DUMP payload and PTTL from Redis
@@ -88,7 +254,7 @@ func ExportSingleKey(conn net.Conn, reader *bufio.Reader, key string, filePath s
 			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
 		}
 
-		resolvedPath, err := resolveFilePath(filePath, true)
+		resolvedPath, err := resolveFilePath(filePath, true, sanitizeFilename(key)+".dump")
 		if err != nil {
 			return RedisResultMsg{Error: err}
 		}
@@ -117,7 +283,7 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
 		}
 
-		resolvedPath, err := resolveFilePath(filePath, false)
+		resolvedPath, err := resolveFilePath(filePath, false, "")
 		if err != nil {
 			return RedisResultMsg{Error: err}
 		}
@@ -176,13 +342,13 @@ func ImportKeys(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
 //
 // The file is written to a temporary path first and atomically renamed on
 // success, so a partial or interrupted export never corrupts a previous export.
-func ExportFullDB(conn net.Conn, reader *bufio.Reader, filePath string) tea.Cmd {
+func ExportFullDB(conn net.Conn, reader *bufio.Reader, db int, filePath string) tea.Cmd {
 	return func() tea.Msg {
 		if conn == nil {
 			return RedisResultMsg{Error: fmt.Errorf("no connection to Redis")}
 		}
 
-		resolvedPath, err := resolveFilePath(filePath, true)
+		resolvedPath, err := resolveFilePath(filePath, true, fmt.Sprintf("redis-db%d.json", db))
 		if err != nil {
 			return RedisResultMsg{Error: err}
 		}

@@ -5,17 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0-beta] - 2026-05-30
+## [1.0.0-beta.1] - Unreleased
 
 ### Added
-- JSON values are now automatically detected, pretty-printed with indentation, and syntax-highlighted in the output view. Keys are colored cyan, string values yellow, numbers pink, and booleans/null red.
+- **Redesigned UI** (GitHub-dark theme): full-screen background, a grouped command menu with section labels, color-coded data types, and key-hint footers pinned to the bottom of every screen.
+- **Guided key picker** for `HSET`, `HGET`, `SADD`, `ZADD`, `RPUSH`, and `LPUSH`: pick an existing key of the matching type — or `＋ new key…` — instead of typing the name. Add commands jump straight into the add form.
+- **Add field/member form** now works for Sets, Sorted Sets, and Lists (press `a` in the field browser), not just Hashes.
+- **Scrollable value & `INFO` inspector**: long output (`INFO`, large JSON) now opens at the top and scrolls with `↑/↓`, `PgUp/PgDn`, and `Home/End` instead of being truncated; lines wrap to the screen width.
+- **Friendlier export/import**: `EXPORT` lets you pick the key from a list and pre-fills a `./<key>.dump` destination; `EXPORT_DB` pre-fills `./redis-db<n>.json`; every file prompt now states whether it wants a source or a destination, and `Tab` completes filesystem paths.
+- **Field-level export/import**: in the field browser, `x` exports the selected hash field, list element, set member, or sorted-set member to a self-describing JSON file, and `i` imports one back (value-based, since `DUMP`/`RESTORE` only work on whole keys).
+- JSON values are automatically detected, pretty-printed, and syntax-highlighted in the output view (keys blue, strings green, numbers orange, booleans/null red).
 
-## [1.0.1-beta] - 2026-05-27
+### Changed
+- `q` now quits immediately from the main menu; the exit-confirmation prompt was removed (`Esc` is a no-op on the menu).
+- Server `INFO` output dims its `# Section` headers for readability.
+- Confirmation and add-field screens are now full-screen layouts (header + content + footer) instead of centered modal boxes.
 
 ### Fixed
-- Output screen now word-wraps large values (JSON, Redis `INFO`, errors) to the terminal width instead of overflowing.
-- Confirmation dialogs (delete key/field) now wrap long key and field names within the dialog box boundary.
-- Edit mode (`e` key) now uses a full multi-line textarea that word-wraps large values to the terminal width instead of a single scrolling line.
+- Edit mode (`e` key) uses a full multi-line textarea that wraps large values instead of a single scrolling line.
 - Pressing `esc` after a successful edit (`e`) or TTL change (`x`) now correctly returns to the browser instead of showing a blank output screen.
 
 ## [1.0.0-beta] - 2026-05-17
@@ -49,6 +56,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Export / Import keys and entire databases via JSON (`DUMP`/`RESTORE`).
 - Exponential backoff reconnection (200 ms → 25.6 s cap) on connection loss.
 
-[1.1.0-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.1.0-beta
-[1.0.1-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.0.1-beta
+[1.0.0-beta.1]: https://github.com/ajxv/redis-tui/releases/tag/v1.0.0-beta.1
 [1.0.0-beta]: https://github.com/ajxv/redis-tui/releases/tag/v1.0.0-beta

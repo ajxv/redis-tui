@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ajxv/redis-tui/internal/tui"
@@ -99,48 +101,66 @@ func run() error {
 		_ = rawConn.Close()
 	}
 
-	// Build menu items
+	// Build grouped menu — EXPLORE is promoted to the top, commands grouped by type.
+	// The group label is embedded in the first item of each section; there are no
+	// separate non-selectable header items, so the cursor always lands on a command.
 	items := []list.Item{
-		tui.NewListItem("SET", "Set a key-value pair"),
+		tui.NewListItem("EXPLORE", "Scan, filter, inspect, edit and delete keys"),
+		tui.NewListItemInGroup("SET", "Set a key-value pair", "STRINGS"),
 		tui.NewListItem("GET", "Get the value of a key"),
-		tui.NewListItem("HSET", "Set a hash field"),
+		tui.NewListItemInGroup("HSET", "Set a hash field", "HASHES"),
 		tui.NewListItem("HGET", "Get the value of a hash field"),
-		tui.NewListItem("RPUSH", "Add value to the end of a list"),
-		tui.NewListItem("LPUSH", "Add value to the beginning of a list"),
-		tui.NewListItem("SADD", "Add value to a set"),
-		tui.NewListItem("ZADD", "Add value to a sorted set"),
-		tui.NewListItem("DELETE", "Delete a key-value pair or an entire hash"),
-		tui.NewListItem("EXPLORE", "Browse keys and values"),
-		tui.NewListItem("INFO", "View Redis server statistics"),
-		tui.NewListItem("EXPORT", "Export a key to a file via DUMP"),
-		tui.NewListItem("IMPORT", "Import a key from a file via RESTORE"),
-		tui.NewListItem("EXPORT_DB", "Export the entire database to a JSON file"),
-		tui.NewListItem("IMPORT_DB", "Import the entire database from a JSON file"),
+		tui.NewListItemInGroup("RPUSH", "Append a value to the end of a list", "LISTS"),
+		tui.NewListItem("LPUSH", "Prepend a value to the start of a list"),
+		tui.NewListItemInGroup("SADD", "Add a member to a set", "SETS & SORTED SETS"),
+		tui.NewListItem("ZADD", "Add a scored member to a sorted set"),
+		tui.NewListItemInGroup("DELETE", "Delete a key", "MANAGE"),
+		tui.NewListItem("EXPORT", "Dump a key to a file (DUMP)"),
+		tui.NewListItem("IMPORT", "Restore a key from a file (RESTORE)"),
+		tui.NewListItem("EXPORT_DB", "Export the entire database to JSON"),
+		tui.NewListItem("IMPORT_DB", "Import the entire database from JSON"),
+		tui.NewListItemInGroup("INFO", "View Redis server statistics", "SERVER"),
 	}
 
-	menuList := list.New(items, list.NewDefaultDelegate(), 0, 0)
-	menuList.Title = "Redis TUI"
-	menuList.FilterInput.Placeholder = "type to search..."
+	menuList := list.New(items, tui.NewGroupedMenuDelegate(), 0, 0)
+	menuList.Title = "Select a command"
+	tui.StyleList(&menuList)
+	menuList.FilterInput.Placeholder = "type to filter commands…"
 
-	fieldsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	fieldsList := list.New([]list.Item{}, tui.BrowserDelegate(), 0, 0)
 	fieldsList.Title = "Select a field"
+	tui.StyleList(&fieldsList)
 
-	keyList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	keyList := list.New([]list.Item{}, tui.BrowserDelegate(), 0, 0)
 	keyList.Title = "Select a key"
+	tui.StyleList(&keyList)
 
 	input := textarea.New()
 	input.ShowLineNumbers = false
-	input.Prompt = ""
+	// Prompt/cursor styling is applied per-render in InputModel.View().
+
+	// textinput instances for the add-field overlay in the browser.
+	fieldInput := textinput.New()
+	fieldInput.Placeholder = "field name"
+	fieldInput.CharLimit = 512
+
+	valueInput := textinput.New()
+	valueInput.Placeholder = "value"
+	valueInput.CharLimit = 4096
 
 	initialModel := tui.Model{
 		CurrentState: tui.StateMenu,
 		MenuList:     menuList,
+		Help:         tui.NewHelp(),
 		Browser: tui.BrowserModel{
-			KeyList:       keyList,
-			FieldsList:    fieldsList,
-			ViewingFields: false,
+			KeyList:    keyList,
+			FieldsList: fieldsList,
+			FieldInput: fieldInput,
+			ValueInput: valueInput,
+			Help:       tui.NewHelp(),
 		},
-		Spinner: spinner.New(spinner.WithSpinner(spinner.Dot)),
+		Spinner:  spinner.New(spinner.WithSpinner(spinner.Dot)),
+		Viewport: viewport.New(0, 0),
 		Input: tui.InputModel{
 			Input: input,
 		},
@@ -153,7 +173,7 @@ func run() error {
 		ReadTimeout:  *readTimeout,
 	}
 
-	p := tea.NewProgram(initialModel)
+	p := tea.NewProgram(initialModel, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("An error occurred: %v\n", err)
 		return err

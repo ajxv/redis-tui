@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ajxv/redis-tui/internal/tui"
@@ -26,6 +27,8 @@ func newTestModel() tui.Model {
 		Browser: tui.BrowserModel{
 			KeyList:    list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
 			FieldsList: list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0),
+			FieldInput: textinput.New(),
+			ValueInput: textinput.New(),
 		},
 		Spinner: spinner.New(),
 		Input:   tui.InputModel{Input: textarea.New()},

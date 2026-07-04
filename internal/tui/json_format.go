@@ -8,12 +8,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// GitHub-dark color palette for JSON highlighting (v2).
 var (
-	jsonKeyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))  // cyan-green
-	jsonStrStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("220")) // yellow
-	jsonNumStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("205")) // pink
-	jsonBoolStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // red
-	jsonPunctStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244")) // gray
+	jsonKeyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#79c0ff")) // light blue
+	jsonStrStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#a8c48b")) // muted green
+	jsonNumStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffa657")) // orange
+	jsonBoolStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#f85149")) // red
+	jsonPunctStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#58626c")) // faint
 )
 
 // tryPrettyJSON returns an indented JSON string if s is valid JSON, otherwise s unchanged.
@@ -29,7 +30,24 @@ func tryPrettyJSON(s string) string {
 	return buf.String()
 }
 
-// colorizeJSON applies ANSI terminal colors to pre-formatted JSON.
+// colorizeInfo styles raw Redis INFO output: lines that start with '#' (section
+// headers) are dimmed, every other line is rendered in the subtle text color.
+func colorizeInfo(s string) string {
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(tnDim))
+	sub := lipgloss.NewStyle().Foreground(lipgloss.Color(tnSubtle))
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		t := strings.TrimRight(ln, "\r")
+		if strings.HasPrefix(strings.TrimSpace(t), "#") {
+			lines[i] = dim.Render(t)
+		} else {
+			lines[i] = sub.Render(t)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// colorizeJSON applies Tokyo Night ANSI colors to pre-formatted JSON.
 func colorizeJSON(s string) string {
 	var out strings.Builder
 	runes := []rune(s)
@@ -42,20 +60,19 @@ func colorizeJSON(s string) string {
 		switch {
 		case ch == '"':
 			start := i
-			i++ // skip opening quote
+			i++
 			for i < n {
 				if runes[i] == '\\' {
 					i += 2
 					continue
 				}
 				if runes[i] == '"' {
-					i++ // skip closing quote
+					i++
 					break
 				}
 				i++
 			}
 			token := string(runes[start:i])
-			// Look ahead past whitespace to check for colon (key indicator)
 			j := i
 			for j < n && (runes[j] == ' ' || runes[j] == '\t') {
 				j++
