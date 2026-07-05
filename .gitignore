@@ -38,3 +38,6 @@ Thumbs.db
 
 # Compiled binary
 redis-tui
+
+# vhs tape
+demo.tape

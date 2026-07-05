@@ -14,6 +14,8 @@ An interactive, fast, and lightweight Terminal User Interface (TUI) for explorin
 ## Features
 
 - **Interactive Database Explorer:** Browse through thousands of keys with SCAN-based pagination.
+- **Type-to-Filter:** Press `/` to narrow the command menu, the key list, or a field/member list down as you type — no need to scroll through hundreds of keys.
+- **TTL at a Glance:** Keys with an expiry show a countdown badge (`4m`, `17s`, …) right in the key list, no need to open them first.
 - **Context-Aware Drilling:** Navigate into Hash fields, Lists, Sets, and Sorted Sets with full CRUD support.
 - **Guided CRUD Wizard:** `HSET`, `HGET`, `SADD`, `ZADD`, `RPUSH`, and `LPUSH` let you pick an existing key of the matching type (or create a new one) and add to it through a focused form — no need to remember exact key names.
 - **Auto-Detected JSON:** String values that look like JSON are pretty-printed and syntax-highlighted; the value/`INFO` inspector scrolls for large output.
@@ -169,9 +171,10 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 
 | Key | Action |
 | :--- | :--- |
-| `↑ / ↓` or `k / j` | Navigate lists |
+| `↑ / ↓` | Navigate lists |
+| `k / j` | Navigate lists (Explore key/field lists only — on the main menu, letters open the filter instead) |
 | `Enter` | Select an item or submit a form |
-| `Esc` | Go back or cancel |
+| `Esc` | Go back, or clear an active filter first if one is set |
 | `Ctrl+C` | Quit |
 
 ### Main Menu
@@ -179,7 +182,8 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 | Key | Action |
 | :--- | :--- |
 | `Enter` | Run the selected command |
-| `/` | Filter commands (type to narrow) |
+| `/` or any letter | Filter commands (type to narrow) |
+| `Esc` | Clear the filter; no-op otherwise |
 | `q` | Quit |
 
 ### Key Browser (Explore mode)
@@ -187,6 +191,7 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 | Key | Action |
 | :--- | :--- |
 | `Enter` | Open selected key |
+| `/` | Filter the key list (type to narrow) |
 | `d` | Delete key (with confirmation) |
 | `r` | Rename key |
 | `n` | Load next page of keys |
@@ -197,7 +202,7 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 | Key | Action |
 | :--- | :--- |
 | `↑ / ↓`, `PgUp / PgDn`, `Home / End` | Scroll long output |
-| `e` | Edit value in-place (TTL is preserved) |
+| `e` | Edit value in-place (TTL is preserved; not available for set/sorted-set members) |
 | `c` | Copy value to clipboard |
 | `x` | Set or clear TTL (enter `0` to persist) |
 | `Esc` | Return to previous screen |
@@ -207,6 +212,7 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 | Key | Action |
 | :--- | :--- |
 | `Enter` | View selected field or member |
+| `/` | Filter the field/member list (type to narrow) |
 | `a` | Add a field / member |
 | `d` | Delete field or member (with confirmation) |
 | `x` | Export selected field / member to JSON |
@@ -218,7 +224,6 @@ redis-tui -url "rediss://alice:secret@my-redis.example.com:6380/0"
 - **Large collections:** Lists, Sets, and Sorted Sets load in pages of 100 items — press `n` to load the next page.
 - **Offset-based list/zset paging:** If items are added or removed mid-browse, reopen the key (`Ctrl+R`) for a consistent view.
 - **Redis Streams:** `XADD` / `XREAD` are not yet supported.
-- **No in-browser search:** Use the pattern input (e.g. `user:*`) when entering Explore mode to narrow the key list.
 
 ## Development
 
@@ -251,7 +256,7 @@ make lint-optional
 ├── internal/
 │   ├── redis/              # RESP protocol parser
 │   └── tui/                # Bubble Tea model, state machine, TLS, URL parser, export/import
-├── docs/                   # Release process and maintainer guides
+├── docs/                   # Release process, maintainer guides, and the VHS tape (demo.tape) behind the README GIF
 └── tests/
     ├── redis/              # Black-box tests for the RESP parser
     └── tui/                # Black-box integration tests for the state machine
